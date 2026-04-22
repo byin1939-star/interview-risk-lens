@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>面试 & 薪资风险评估系统 · HRBP Risk Lens v2</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window['pdfjsLib']) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .glass { background: rgba(255,255,255,0.78); backdrop-filter: blur(14px); }
+  .grad-bg { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #581c87 100%); }
+  .risk-low    { color:#059669; background:#d1fae5; }
+  .risk-mid    { color:#d97706; background:#fef3c7; }
+  .risk-high   { color:#dc2626; background:#fee2e2; }
+  .risk-critical { color:#fff; background:#991b1b; }
+  textarea, input, select { transition: all .2s; }
+  textarea:focus, input:focus, select:focus { box-shadow: 0 0 0 3px rgba(99,102,241,.2); outline:none; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+  .step-num { width:28px; height:28px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center;
+    background:#4f46e5; color:white; font-weight:bold; font-size:14px; margin-right:8px; }
+  .file-ok { background:#d1fae5 !important; color:#065f46; border-color:#10b981 !important; }
+  .pulse-dot { display:inline-block; width:8px; height:8px; border-radius:999px; background:#10b981; animation: pulse 1.4s infinite; margin-right:6px; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.3;} }
+  .loading { display:inline-block; width:14px; height:14px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body class="grad-bg min-h-screen pb-16">
+
+<header class="max-w-7xl mx-auto px-6 pt-10 pb-6 text-white">
+  <div class="flex items-center justify-between flex-wrap gap-4">
+    <div>
+      <h1 class="text-3xl md:text-4xl font-bold tracking-tight">面试 &amp; 薪资风险评估系统</h1>
+      <p class="text-indigo-200 mt-2 text-sm">HRBP Risk Lens v2 · 简历真伪识别 + AI 深度评估 + 薪资市场对标</p>
+    </div>
+    <div class="text-right text-xs text-indigo-200 leading-relaxed">
+      <div>作者 / Authors</div>
+      <div class="text-white font-semibold text-sm tracking-wider">谢书成 &nbsp;·&nbsp; 王岳伦</div>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 space-y-6">
+
+  <!-- 步骤 1：数据源 -->
+  <section class="glass rounded-2xl p-6 shadow-xl">
+    <h2 class="text-lg font-bold text-slate-800 mb-4 flex items-center">
+      <span class="step-num">1</span>数据源
+    </h2>
+    <div class="grid md:grid-cols-5 gap-4">
+      <div class="md:col-span-3">
+        <label class="block text-sm font-semibold text-slate-700 mb-2">📋 在线岗位需求表 (Google Sheet URL)</label>
+        <input id="jdUrl" type="text" class="w-full p-2 border border-slate-300 rounded-lg text-sm font-mono"
+          value="https://docs.google.com/spreadsheets/d/1YJewXWDnl6KX3QcVbJS8dX74_raE3ixY2frRqW3zLX4/edit?gid=1446787248" />
+        <div id="jdInfo" class="mt-2 text-xs text-slate-500">点击右侧「拉取」自动加载。Sheet 需设为「拥有链接的人可查看」。</div>
+      </div>
+      <div class="flex items-end">
+        <button id="fetchJdBtn" class="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold text-sm">⬇️ 拉取在线 JD</button>
+      </div>
+      <div class="flex items-end">
+        <label class="w-full block">
+          <span class="block text-xs font-semibold text-slate-600 mb-1">或本地 xlsx</span>
+          <input type="file" id="jdFile" accept=".xlsx,.xls"
+            class="block w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-indigo-50 file:text-indigo-700 border border-slate-300 rounded p-1" />
+        </label>
+      </div>
+    </div>
+
+    <div class="mt-5">
+      <label class="block text-sm font-semibold text-slate-700 mb-2">💰 薪资花名册 C 表（xlsx，本地上传）</label>
+      <input type="file" id="rosterFile" accept=".xlsx,.xls"
+        class="block w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100 border border-slate-300 rounded-lg p-1" />
+      <div id="rosterInfo" class="mt-2 text-xs text-slate-500">未加载。仅取「在职」员工作为薪资对标基准。</div>
+    </div>
+  </section>
+
+  <!-- 步骤 2：选择岗位 -->
+  <section class="glass rounded-2xl p-6 shadow-xl">
+    <h2 class="text-lg font-bold text-slate-800 mb-4 flex items-center">
+      <span class="step-num">2</span>选择应聘岗位
+    </h2>
+    <div class="grid md:grid-cols-4 gap-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">项目组 / 公司</label>
+        <select id="projSelect" class="w-full p-2.5 border border-slate-300 rounded-lg text-sm bg-white" disabled>
+          <option>—</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">部门</label>
+        <select id="deptSelect" class="w-full p-2.5 border border-slate-300 rounded-lg text-sm bg-white" disabled>
+          <option>—</option>
+        </select>
+      </div>
+      <div class="md:col-span-2">
+        <label class="block text-xs font-semibold text-slate-600 mb-1">岗位</label>
+        <select id="jobSelect" class="w-full p-2.5 border border-slate-300 rounded-lg text-sm bg-white" disabled>
+          <option>请先拉取 JD</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4 mt-3">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">职级</label>
+        <input id="jobLevel" type="text" readonly class="w-full p-2.5 border border-slate-300 rounded-lg text-sm bg-slate-50" placeholder="自动填充" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">HC / 状态</label>
+        <input id="jobHc" type="text" readonly class="w-full p-2.5 border border-slate-300 rounded-lg text-sm bg-slate-50" />
+      </div>
+    </div>
+    <div class="grid md:grid-cols-3 gap-4 mt-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">岗位底薪范围</label>
+        <input id="jobSalary" type="text" readonly class="w-full p-2.5 border border-slate-300 rounded-lg text-sm bg-slate-50" />
+      </div>
+      <div class="md:col-span-2">
+        <label class="block text-xs font-semibold text-slate-600 mb-1">部门 / 项目组</label>
+        <input id="jobDept" type="text" readonly class="w-full p-2.5 border border-slate-300 rounded-lg text-sm bg-slate-50" />
+      </div>
+    </div>
+    <div class="mt-4">
+      <label class="block text-xs font-semibold text-slate-600 mb-1">岗位 JD 详情 / 简历筛选要点（可手动修改）</label>
+      <textarea id="jdDetail" rows="6" class="w-full p-3 border border-slate-300 rounded-lg text-sm"></textarea>
+    </div>
+  </section>
+
+  <!-- 步骤 3：候选人信息 -->
+  <section class="glass rounded-2xl p-6 shadow-xl">
+    <h2 class="text-lg font-bold text-slate-800 mb-4 flex items-center">
+      <span class="step-num">3</span>候选人信息 + 面试转写
+    </h2>
+    <div class="grid md:grid-cols-4 gap-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">姓名</label>
+        <input id="candName" type="text" class="w-full p-2 border border-slate-300 rounded-lg text-sm" placeholder="张三" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">声称工作年限</label>
+        <input id="claimYears" type="number" class="w-full p-2 border border-slate-300 rounded-lg text-sm" placeholder="5" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">期望月薪 (K)</label>
+        <input id="expectSalary" type="number" class="w-full p-2 border border-slate-300 rounded-lg text-sm" placeholder="15" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">学历</label>
+        <select id="edu" class="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white">
+          <option value="高中">高中及以下</option>
+          <option value="大专" selected>大专</option>
+          <option value="本科">本科</option>
+          <option value="硕士">硕士</option>
+          <option value="博士">博士</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <div class="flex items-center justify-between mb-1">
+        <label class="block text-xs font-semibold text-slate-600">候选人简历（可上传 PDF / Word / 直接粘贴）</label>
+        <input type="file" id="resumeFile" accept=".pdf,.txt,.md,.docx"
+          class="text-xs text-slate-600 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:bg-indigo-50 file:text-indigo-700 file:text-xs hover:file:bg-indigo-100" />
+      </div>
+      <textarea id="resumeText" rows="6" placeholder="上传 PDF 后会自动提取文本到此处，也可手动粘贴" class="w-full p-3 border border-slate-300 rounded-lg text-sm"></textarea>
+      <div id="resumeStatus" class="text-xs text-slate-500 mt-1"></div>
+    </div>
+
+    <div class="mt-4">
+      <label class="block text-xs font-semibold text-slate-600 mb-1">面试语音转写文本（核心分析对象）</label>
+      <textarea id="transcript" rows="8" placeholder="把面试录音的语音转文本结果粘贴在这里。建议带说话人标签：候选人：…… / 面试官：……" class="w-full p-3 border border-slate-300 rounded-lg text-sm"></textarea>
+    </div>
+  </section>
+
+  <!-- 步骤 4：AI 配置 -->
+  <section class="glass rounded-2xl p-6 shadow-xl">
+    <h2 class="text-lg font-bold text-slate-800 mb-4 flex items-center">
+      <span class="step-num">4</span>AI 引擎配置
+    </h2>
+    <div class="grid md:grid-cols-3 gap-4">
+      <div class="md:col-span-2">
+        <label class="block text-xs font-semibold text-slate-600 mb-1">DeepSeek API Key</label>
+        <input id="apiKey" type="password" class="w-full p-2 border border-slate-300 rounded-lg text-sm font-mono" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">薪资压价幅度</label>
+        <select id="discount" class="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white">
+          <option value="0.05">压 5%</option>
+          <option value="0.075" selected>压 7.5%</option>
+          <option value="0.10">压 10%</option>
+          <option value="0">不压价</option>
+        </select>
+      </div>
+    </div>
+    <div class="mt-5 flex flex-wrap gap-3">
+      <button id="analyzeBtn" class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg shadow-indigo-300/40 flex items-center gap-2">
+        <span>🚀 启动 AI 综合评估</span>
+      </button>
+      <button id="demoBtn" class="px-4 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-lg text-sm hover:bg-slate-50">载入示例候选人</button>
+      <button id="quickBtn" class="px-4 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-lg text-sm hover:bg-slate-50">仅本地启发式分析（不调 AI）</button>
+    </div>
+    <div id="apiStatus" class="mt-3 text-xs text-slate-500"></div>
+  </section>
+
+  <!-- 结果区 -->
+  <section id="resultBox" class="hidden space-y-6">
+
+    <!-- 总评分卡 -->
+    <div class="glass rounded-2xl p-6 shadow-xl">
+      <div class="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h2 class="text-lg font-bold text-slate-800">📊 综合评估结果</h2>
+          <p class="text-xs text-slate-500 mt-1">分越高 → 越值得 offer；红色区间代表存在简历造假/代面/薪资严重不匹配</p>
+        </div>
+        <div id="scoreBadge" class="text-3xl font-black px-6 py-3 rounded-xl">--</div>
+      </div>
+      <div class="mt-4 w-full bg-slate-200 rounded-full h-3 overflow-hidden">
+        <div id="scoreBar" class="h-full transition-all" style="width:0%"></div>
+      </div>
+      <div id="verdict" class="mt-4 p-4 rounded-lg text-sm leading-relaxed"></div>
+    </div>
+
+    <!-- 双柱状图 -->
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="glass rounded-2xl p-6 shadow-xl">
+        <h3 class="text-base font-bold text-slate-800 mb-3">🎯 面试评估维度（柱状图）</h3>
+        <canvas id="interviewBar"></canvas>
+      </div>
+      <div class="glass rounded-2xl p-6 shadow-xl">
+        <h3 class="text-base font-bold text-slate-800 mb-3">💰 薪资市场对标（柱状图，单位 K）</h3>
+        <canvas id="salaryBar"></canvas>
+        <div id="salaryRec" class="mt-4 p-3 bg-indigo-50 border border-indigo-200 rounded-lg text-sm leading-relaxed"></div>
+      </div>
+    </div>
+
+    <!-- AI 文字评估 -->
+    <div class="glass rounded-2xl p-6 shadow-xl">
+      <h3 class="text-base font-bold text-slate-800 mb-3">🤖 AI 深度分析报告</h3>
+      <div id="aiReport" class="prose prose-sm max-w-none text-slate-700 whitespace-pre-wrap leading-relaxed"></div>
+    </div>
+
+    <!-- 风险信号 + 追问 -->
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="glass rounded-2xl p-6 shadow-xl">
+        <h3 class="text-base font-bold text-slate-800 mb-3">⚠️ 风险信号清单</h3>
+        <div id="flags" class="space-y-2 text-sm"></div>
+      </div>
+      <div class="glass rounded-2xl p-6 shadow-xl">
+        <h3 class="text-base font-bold text-slate-800 mb-3">🎯 建议追问问题</h3>
+        <ol id="questions" class="list-decimal list-inside space-y-2 text-sm text-slate-700"></ol>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="max-w-7xl mx-auto px-6 mt-12 text-center text-xs text-indigo-200">
+  © 2026 Interview Risk Lens v2 · 仅供 HRBP 内部风控参考 · Authored by 谢书成 &amp; 王岳伦
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const DEFAULT_KEY = 'sk-f6278db3334e4078983b887c5d1c2126';
+$('apiKey').value = DEFAULT_KEY;
+
+let JD_ROWS = [];        // 解析后的 JD 列表
+let ROSTER_ROWS = [];    // 解析后的花名册行
+let SELECTED_JOB = null;
+let charts = {};
+
+/* ========== 文件解析 ========== */
+function parseSheet(file, cb) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
+    cb(wb);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function loadJDData(rows) {
+  JD_ROWS = rows.filter(r => r['岗位名称'] && r['状态'] !== '已关闭');
+  $('jdInfo').className = 'mt-2 text-xs file-ok p-2 rounded';
+  $('jdInfo').textContent = `✓ 已加载 ${JD_ROWS.length} 个有效岗位`;
+  fillProjectSelect();
+}
+
+$('jdFile').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  parseSheet(f, wb => {
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    loadJDData(XLSX.utils.sheet_to_json(ws, { defval: null }));
+  });
+});
+
+function gsheetCsvUrl(url) {
+  const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (!m) return null;
+  const gidM = url.match(/[?&#]gid=(\d+)/);
+  const gid = gidM ? gidM[1] : '0';
+  // gviz 端点直接返回 CSV 且带 Access-Control-Allow-Origin 响应头，浏览器可直连
+  return `https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv&gid=${gid}`;
+}
+
+// JSONP 加载 gviz：用 <script> 标签绕过 CORS，最稳定
+function gvizJsonp(sheetId, gid, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const cb = '__gviz_cb_' + Date.now();
+    const s = document.createElement('script');
+    const timer = setTimeout(() => { cleanup(); reject(new Error('JSONP 超时')); }, timeoutMs);
+    function cleanup() { clearTimeout(timer); delete window[cb]; s.remove(); }
+    window[cb] = (data) => {
+      cleanup();
+      try {
+        const cols = data.table.cols.map(c => c.label || c.id);
+        const rows = data.table.rows.map(r => {
+          const o = {};
+          (r.c || []).forEach((cell, i) => { o[cols[i]] = cell ? (cell.v ?? cell.f) : null; });
+          return o;
+        });
+        resolve(rows);
+      } catch (e) { reject(new Error('JSONP 解析失败: ' + e.message)); }
+    };
+    s.onerror = () => { cleanup(); reject(new Error('JSONP 脚本加载失败')); };
+    s.src = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?gid=${gid}&tqx=out:json;responseHandler:${cb}`;
+    document.body.appendChild(s);
+  });
+}
+
+async function tryFetchCsv(csvUrl) {
+  const log = [];
+  // 0) JSONP（首选，绕过 CORS）
+  const m = csvUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  const gid = (csvUrl.match(/gid=(\d+)/) || [])[1] || '0';
+  if (m) {
+    try {
+      const rows = await gvizJsonp(m[1], gid);
+      return { rows, via: 'JSONP', log };
+    } catch (e) { log.push(`JSONP: ${e.message}`); }
+  }
+  // 1) fetch 系列兜底
+  const channels = [
+    { name: 'gviz直连', url: csvUrl },
+    { name: 'export直连', url: csvUrl.replace('/gviz/tq?tqx=out:csv&', '/export?format=csv&') },
+    { name: 'allorigins代理', url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(csvUrl) },
+  ];
+  for (const c of channels) {
+    try {
+      const r = await fetch(c.url, { redirect: 'follow' });
+      if (!r.ok) { log.push(`${c.name}: HTTP ${r.status}`); continue; }
+      const t = await r.text();
+      if (!t) { log.push(`${c.name}: 空响应`); continue; }
+      if (/<html|<!doctype/i.test(t.slice(0, 200))) { log.push(`${c.name}: 返回HTML(可能登录页)`); continue; }
+      return { csv: t, via: c.name, log };
+    } catch (e) { log.push(`${c.name}: ${e.message}`); }
+  }
+  const err = new Error('全部通道失败');
+  err.log = log;
+  throw err;
+}
+
+$('fetchJdBtn').addEventListener('click', async () => {
+  const url = $('jdUrl').value.trim();
+  const csvUrl = gsheetCsvUrl(url);
+  if (!csvUrl) { alert('URL 格式不对，应为 Google Sheet 链接'); return; }
+  $('jdInfo').className = 'mt-2 text-xs text-slate-500';
+  $('jdInfo').textContent = '正在拉取在线表格…';
+  try {
+    const result = await tryFetchCsv(csvUrl);
+    let rows;
+    if (result.rows) {
+      rows = result.rows;
+    } else {
+      const wb = XLSX.read(result.csv, { type: 'string' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+    }
+    const via = result.via;
+    if (!rows.length) throw new Error('表格为空或表头无法识别');
+    loadJDData(rows);
+    $('jdInfo').textContent = `✓ 通过【${via}】加载 ${JD_ROWS.length} 个有效岗位`;
+  } catch (e) {
+    $('jdInfo').className = 'mt-2 text-xs text-rose-600 leading-relaxed';
+    const detail = (e.log || []).map(l => `· ${l}`).join('<br>');
+    $('jdInfo').innerHTML = `❌ 拉取失败：${e.message}<br><b>各通道详情：</b><br>${detail}<br><span class="text-slate-600">可改用本地 xlsx 上传兜底</span>`;
+  }
+});
+
+$('rosterFile').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  parseSheet(f, wb => {
+    const ws = wb.Sheets['花名册'] || wb.Sheets[wb.SheetNames[0]];
+    // 表头在第 3 行 (index 2)
+    const arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+    let headerRow = -1;
+    for (let i = 0; i < Math.min(arr.length, 10); i++) {
+      if ((arr[i] || []).includes('职级*') || (arr[i] || []).includes('职级')) { headerRow = i; break; }
+    }
+    if (headerRow < 0) { alert('未识别花名册表头'); return; }
+    const headers = arr[headerRow];
+    const rows = arr.slice(headerRow + 1).filter(r => r && r[3]);
+    ROSTER_ROWS = rows.map(r => {
+      const obj = {};
+      headers.forEach((h, i) => { if (h) obj[String(h).replace('*','').trim()] = r[i]; });
+      return obj;
+    }).filter(o => o['在职状态'] === '在职');
+    const ops = ROSTER_ROWS.filter(o => /运营/.test(String(o['部门']||o['编制组织']||'')));
+    $('rosterInfo').className = 'mt-2 text-xs file-ok p-2 rounded';
+    $('rosterInfo').textContent = `✓ 加载 ${ROSTER_ROWS.length} 名在职员工，其中运营相关 ${ops.length} 名可作薪资对标`;
+  });
+});
+
+function uniq(arr) { return [...new Set(arr.filter(Boolean))]; }
+
+function fillProjectSelect() {
+  const sel = $('projSelect');
+  sel.disabled = false;
+  const projs = uniq(JD_ROWS.map(r => r['项目组']));
+  sel.innerHTML = '<option value="">全部项目组</option>' + projs.map(p => `<option>${p}</option>`).join('');
+  fillDeptSelect();
+}
+
+function fillDeptSelect() {
+  const sel = $('deptSelect');
+  sel.disabled = false;
+  const proj = $('projSelect').value;
+  const pool = proj ? JD_ROWS.filter(r => r['项目组'] === proj) : JD_ROWS;
+  const depts = uniq(pool.map(r => r['部门']));
+  sel.innerHTML = '<option value="">全部部门</option>' + depts.map(d => `<option>${d}</option>`).join('');
+  fillJobSelect();
+}
+
+function fillJobSelect() {
+  const sel = $('jobSelect');
+  sel.disabled = false;
+  const proj = $('projSelect').value, dept = $('deptSelect').value;
+  const pool = JD_ROWS.filter(r =>
+    (!proj || r['项目组'] === proj) && (!dept || r['部门'] === dept)
+  );
+  sel.innerHTML = '<option value="">— 请选择岗位 —</option>' + pool.map(j => {
+    const idx = JD_ROWS.indexOf(j);
+    return `<option value="${idx}">${j['岗位名称']} (${j['职级']||''}) · ${j['底薪范围']||''} · ${j['状态']||''}</option>`;
+  }).join('');
+}
+
+$('projSelect').addEventListener('change', fillDeptSelect);
+$('deptSelect').addEventListener('change', fillJobSelect);
+
+$('jobSelect').addEventListener('change', e => {
+  const j = JD_ROWS[e.target.value];
+  if (!j) return;
+  SELECTED_JOB = j;
+  $('jobLevel').value = j['职级'] || '';
+  $('jobSalary').value = j['底薪范围'] || '';
+  $('jobHc').value = `HC ${j['HC总需求']||0} · 已到岗 ${j['已到岗']||0} · 招聘中 ${j['招聘中']||0} · ${j['状态']||''}`;
+  $('jdDetail').value = `【简历筛选要点】\n${j['简历筛选要点']||'-'}\n\n【岗位 JD】\n${j['岗位JD']||'-'}`;
+});
+
+/* ========== 薪资分析 ========== */
+function parseSalaryRange(s) {
+  if (!s) return null;
+  const m = String(s).toLowerCase().replace(/，/g,',').match(/(\d+(?:\.\d+)?)\s*[-~到]\s*(\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  return { min: parseFloat(m[1]), max: parseFloat(m[2]) };
+}
+
+function buildSalaryBenchmark(jobLevel, jobName) {
+  // 取运营序列中相同/相近职级的转正后薪资作为对标
+  const ops = ROSTER_ROWS.filter(o => /运营/.test(String(o['部门']||o['编制组织']||'')));
+  const sameLevel = ops.filter(o => String(o['职级']||'').toUpperCase() === String(jobLevel||'').toUpperCase());
+  const target = sameLevel.length >= 3 ? sameLevel : ops;
+  const salaries = target.map(o => parseFloat(o['转正后薪资'])).filter(v => v > 0);
+  if (!salaries.length) return null;
+  salaries.sort((a,b)=>a-b);
+  const med = salaries[Math.floor(salaries.length/2)];
+  const p25 = salaries[Math.floor(salaries.length*0.25)];
+  const p75 = salaries[Math.floor(salaries.length*0.75)];
+  const avg = salaries.reduce((s,v)=>s+v,0)/salaries.length;
+  return { count: salaries.length, min: salaries[0], max: salaries.at(-1), med, p25, p75, avg, basedOnSameLevel: sameLevel.length >= 3 };
+}
+
+/* ========== 本地启发式评分（兜底/快速模式） ========== */
+function localScore() {
+  const resume = $('resumeText').value, transcript = $('transcript').value;
+  const cliches = ['闭环','抓手','颗粒度','赋能','降本增效','对齐','链路','认真负责','团队合作','沟通能力'];
+  const clicheHit = cliches.filter(c => transcript.includes(c)).length;
+  const nums = (transcript.match(/\d+/g) || []).length;
+  const me = (transcript.match(/我/g) || []).length;
+  const team = (transcript.match(/我们|团队|大家/g) || []).length;
+
+  const jdMatch = SELECTED_JOB ? overlapPct((SELECTED_JOB['岗位JD']||'') + (SELECTED_JOB['简历筛选要点']||''), resume) : 60;
+  const consistency = overlapPct(resume, transcript);
+  const detail = Math.min(100, nums * 5 + (transcript.length > 800 ? 20 : 10));
+  const naturalness = Math.max(20, 100 - clicheHit * 12);
+  const ownership = me >= team ? 85 : Math.max(30, 80 - (team - me) * 6);
+  const stability = transcript.length > 500 ? 75 : 50;
+
+  return {
+    'JD匹配度': Math.round(jdMatch),
+    '简历一致性': Math.round(consistency),
+    '细节真实度': Math.round(detail),
+    '应答自然度': Math.round(naturalness),
+    '个人贡献清晰度': Math.round(ownership),
+    '稳定性表达': Math.round(stability)
+  };
+}
+
+function overlapPct(a, b) {
+  if (!a || !b) return 0;
+  const grams = new Set();
+  const cn = a.replace(/[^\u4e00-\u9fa5a-zA-Z]/g, ' ').toLowerCase().split(/\s+/);
+  cn.forEach(seg => {
+    if (/[a-z]/.test(seg) && seg.length >= 3) grams.add(seg);
+    for (let n = 2; n <= 3; n++) for (let i = 0; i + n <= seg.length; i++) grams.add(seg.substr(i, n));
+  });
+  let hit = 0; const lb = b.toLowerCase();
+  grams.forEach(g => { if (g.length >= 2 && lb.includes(g)) hit++; });
+  return Math.min(100, (hit / Math.max(1, grams.size)) * 130);
+}
+
+/* ========== AI 调用 ========== */
+async function callDeepSeek(prompt) {
+  const key = $('apiKey').value.trim();
+  if (!key) throw new Error('请先填写 DeepSeek API Key');
+  const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [
+        { role: 'system', content: '你是一位资深 HRBP 风控专家与组织诊断顾问，擅长从面试转写文本中识别简历造假、代面、夸大经历等风险，并给出薪资建议。请严格按要求输出 JSON。' },
+        { role: 'user', content: prompt }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3
+    })
+  });
+  if (!resp.ok) throw new Error('API 调用失败：' + resp.status + ' ' + (await resp.text()));
+  const data = await resp.json();
+  return JSON.parse(data.choices[0].message.content);
+}
+
+function buildPrompt(ctx) {
+  const { job, resume, transcript, candName, claimYears, edu, expectSalary, salaryBench, discountPct } = ctx;
+  return `请对以下候选人进行多维评估，输出 **严格 JSON**（不要任何额外说明文字）。
+
+【应聘岗位】
+名称：${job?.['岗位名称']||'未指定'}
+部门：${job?.['部门']||'-'}
+职级：${job?.['职级']||'-'}
+底薪范围：${job?.['底薪范围']||'-'}
+JD要点：${(job?.['岗位JD']||'').slice(0,800)}
+筛选要点：${(job?.['简历筛选要点']||'').slice(0,500)}
+
+【候选人基本信息】
+姓名：${candName||'-'}  学历：${edu}  声称工作年限：${claimYears||'-'}年  期望月薪：${expectSalary||'-'}K
+
+【简历内容】
+${resume.slice(0, 2000)}
+
+【面试语音转写】
+${transcript.slice(0, 4000)}
+
+【公司同岗位薪资对标（来自花名册）】
+${salaryBench ? `样本数 ${salaryBench.count}，P25=${salaryBench.p25}，中位=${salaryBench.med}，P75=${salaryBench.p75}，平均=${salaryBench.avg.toFixed(0)}（单位元/月）` : '无足够样本'}
+
+【任务】请输出如下结构的 JSON：
+{
+  "interview_scores": {
+    "JD匹配度": 0-100,
+    "简历一致性": 0-100,
+    "细节真实度": 0-100,
+    "应答自然度": 0-100,
+    "个人贡献清晰度": 0-100,
+    "稳定性表达": 0-100
+  },
+  "overall_score": 0-100整数（综合推荐分，考虑造假风险后的最终结论分）,
+  "verdict": "一句话结论：是否推荐 + 主要原因",
+  "report": "300-500字的深度分析报告，包含：1) 简历真实性判断 2) 面试表现评价 3) 与岗位匹配度 4) 是否怀疑代面/造假及具体证据",
+  "risk_flags": [{"level":"low|mid|high|critical","text":"具体风险点"}],
+  "follow_up_questions": ["针对该候选人最该追问的 5-8 个问题"],
+  "salary_suggestion": {
+    "market_median_k": 数字（基于公司同岗位中位数，单位K）,
+    "candidate_expect_k": 数字,
+    "recommended_offer_k": 数字（按压价幅度 ${(discountPct*100).toFixed(1)}% 给出建议offer，需在岗位底薪范围内，且不高于市场中位×(1-${discountPct})）,
+    "reason": "薪资建议理由 60-120字"
+  }
+}`;
+}
+
+/* ========== 渲染 ========== */
+function renderAll(result) {
+  $('resultBox').classList.remove('hidden');
+  const total = result.overall_score;
+  const badge = $('scoreBadge'); badge.textContent = total + '分';
+  let cls, vTxt;
+  if (total >= 75)      { cls='risk-low';      vTxt='✅ 推荐：可推进 offer'; }
+  else if (total >= 60) { cls='risk-mid';      vTxt='⚠️ 谨慎推荐：建议二面深挖'; }
+  else if (total >= 40) { cls='risk-high';     vTxt='🚨 高风险：建议安排技术深挖 + 背调'; }
+  else                  { cls='risk-critical'; vTxt='⛔ 极高风险：高度疑似造假/代面，建议终止'; }
+  badge.className = 'text-3xl font-black px-6 py-3 rounded-xl ' + cls;
+  $('scoreBar').style.width = total + '%';
+  $('scoreBar').style.background = total >= 75 ? '#10b981' : total >= 60 ? '#f59e0b' : total >= 40 ? '#ef4444' : '#7f1d1d';
+  const v = $('verdict'); v.className = 'mt-4 p-4 rounded-lg text-sm leading-relaxed ' + cls;
+  v.innerHTML = `<b>${vTxt}</b>　·　${result.verdict || ''}`;
+
+  // 面试柱状图
+  const dims = result.interview_scores;
+  const labels = Object.keys(dims), vals = Object.values(dims);
+  if (charts.iv) charts.iv.destroy();
+  charts.iv = new Chart($('interviewBar'), {
+    type: 'bar',
+    data: { labels, datasets: [{
+      label: '得分', data: vals,
+      backgroundColor: vals.map(v => v>=70?'#10b981':v>=50?'#f59e0b':'#ef4444'),
+      borderRadius: 6
+    }]},
+    options: { scales: { y: { beginAtZero:true, max:100 } }, plugins: { legend:{display:false} } }
+  });
+
+  // 薪资柱状图
+  const ss = result.salary_suggestion || {};
+  const job = SELECTED_JOB;
+  const jdRange = job ? parseSalaryRange(job['底薪范围']) : null;
+  const salLabels = ['JD最低', 'JD最高', '市场中位', '候选人期望', '建议offer'];
+  const salVals = [
+    jdRange?.min || 0, jdRange?.max || 0,
+    ss.market_median_k || 0, ss.candidate_expect_k || 0, ss.recommended_offer_k || 0
+  ];
+  if (charts.sal) charts.sal.destroy();
+  charts.sal = new Chart($('salaryBar'), {
+    type: 'bar',
+    data: { labels: salLabels, datasets: [{
+      label: '月薪 (K)', data: salVals,
+      backgroundColor: ['#94a3b8','#94a3b8','#6366f1','#f59e0b','#10b981'],
+      borderRadius: 6
+    }]},
+    options: { scales: { y: { beginAtZero:true } }, plugins: { legend:{display:false} } }
+  });
+  $('salaryRec').innerHTML = `<b>💡 薪资建议：</b> ${ss.reason || '-'}<br>
+    <b>建议 offer：${ss.recommended_offer_k || '-'}K</b> · 市场中位 ${ss.market_median_k||'-'}K · 候选人期望 ${ss.candidate_expect_k||'-'}K`;
+
+  // AI 报告
+  $('aiReport').textContent = result.report || '';
+
+  // 风险信号
+  $('flags').innerHTML = (result.risk_flags || []).map(f => {
+    const map = {low:'risk-low', mid:'risk-mid', high:'risk-high', critical:'risk-critical'};
+    const tag = {low:'低', mid:'中', high:'高', critical:'极高'}[f.level] || '提示';
+    return `<div class="flex items-start gap-3 p-3 border border-slate-200 rounded-lg">
+      <span class="badge ${map[f.level]||'risk-mid'}">${tag}</span>
+      <span class="text-slate-700 flex-1">${f.text}</span></div>`;
+  }).join('') || '<div class="text-sm text-slate-500">未发现明显风险</div>';
+
+  $('questions').innerHTML = (result.follow_up_questions || []).map(q => `<li>${q}</li>`).join('');
+  $('resultBox').scrollIntoView({behavior:'smooth'});
+}
+
+/* ========== 主流程 ========== */
+async function runAnalysis(useAI) {
+  const resume = $('resumeText').value.trim();
+  const transcript = $('transcript').value.trim();
+  if (!resume || !transcript) { alert('请填写「简历内容」和「面试转写文本」'); return; }
+  if (!SELECTED_JOB) { alert('请先选择岗位'); return; }
+
+  const expectSalary = parseFloat($('expectSalary').value) || 0;
+  const claimYears = parseFloat($('claimYears').value) || 0;
+  const edu = $('edu').value;
+  const candName = $('candName').value || '候选人';
+  const discountPct = parseFloat($('discount').value);
+
+  // 计算公司内薪资对标
+  const bench = ROSTER_ROWS.length ? buildSalaryBenchmark(SELECTED_JOB['职级'], SELECTED_JOB['岗位名称']) : null;
+
+  if (useAI) {
+    $('apiStatus').innerHTML = '<span class="loading"></span> 正在调用 DeepSeek 分析中（约 10-30 秒）…';
+    $('analyzeBtn').disabled = true;
+    try {
+      const prompt = buildPrompt({
+        job: SELECTED_JOB, resume, transcript, candName, claimYears, edu, expectSalary,
+        salaryBench: bench, discountPct
+      });
+      const result = await callDeepSeek(prompt);
+      // 用本地数据补全薪资若AI未给出合理值
+      if (!result.salary_suggestion?.candidate_expect_k && expectSalary) {
+        result.salary_suggestion = result.salary_suggestion || {};
+        result.salary_suggestion.candidate_expect_k = expectSalary;
+      }
+      $('apiStatus').innerHTML = '<span class="pulse-dot"></span> AI 分析完成';
+      renderAll(result);
+    } catch (e) {
+      $('apiStatus').innerHTML = '<span class="text-rose-600">❌ ' + e.message + '</span><br>已自动降级为本地启发式分析';
+      runLocal();
+    } finally {
+      $('analyzeBtn').disabled = false;
+    }
+  } else {
+    runLocal();
+  }
+
+  function runLocal() {
+    const dims = localScore();
+    const total = Math.round(Object.values(dims).reduce((s,v)=>s+v,0) / Object.keys(dims).length);
+    const med_k = bench ? +(bench.med/1000).toFixed(1) : (parseSalaryRange(SELECTED_JOB['底薪范围'])?.min || 10);
+    const recommended = +(med_k * (1 - discountPct)).toFixed(1);
+    renderAll({
+      overall_score: total,
+      verdict: '本地启发式分析（未调用 AI）',
+      interview_scores: dims,
+      report: '此结果基于关键词匹配、模板话术检测、第一人称比例、数字密度等本地规则。建议启用 AI 分析获得更精准评估。',
+      risk_flags: [
+        ...(transcript.length < 300 ? [{level:'high', text:'转写文本过短，可信度有限'}] : []),
+        ...(dims['细节真实度'] < 50 ? [{level:'high', text:'细节真实度不足，量化数据稀少'}] : []),
+        ...(dims['应答自然度'] < 60 ? [{level:'mid', text:'话术模板化迹象明显'}] : []),
+      ],
+      follow_up_questions: [
+        '请用具体数字描述你最有成就感的项目（投入产出/收益）',
+        '上一份工作离职原因？现在拿到了哪些 offer？',
+        '请回忆入职日期（精确到月）以及第一周做的事',
+        '简历项目里你的直接 leader 叫什么？团队如何分工？',
+        '请口述项目从用户请求到落库的完整链路'
+      ],
+      salary_suggestion: {
+        market_median_k: med_k,
+        candidate_expect_k: expectSalary,
+        recommended_offer_k: recommended,
+        reason: `按公司同岗位中位 ${med_k}K，下压 ${(discountPct*100).toFixed(1)}% 得 ${recommended}K，符合 JD 范围。`
+      }
+    });
+  }
+}
+
+$('analyzeBtn').addEventListener('click', () => runAnalysis(true));
+$('quickBtn').addEventListener('click', () => runAnalysis(false));
+
+$('resumeFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const ext = f.name.split('.').pop().toLowerCase();
+  $('resumeStatus').textContent = `正在解析 ${f.name}…`;
+  try {
+    let text = '';
+    if (ext === 'pdf') {
+      const buf = await f.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      const parts = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const tc = await page.getTextContent();
+        parts.push(tc.items.map(it => it.str).join(' '));
+      }
+      text = parts.join('\n\n');
+    } else if (ext === 'docx') {
+      // 简易 docx：解压后取 word/document.xml 的 <w:t> 文本
+      const buf = await f.arrayBuffer();
+      const u8 = new Uint8Array(buf);
+      // 用 SheetJS 的 zip 不方便，简单提示
+      $('resumeStatus').textContent = '⚠️ docx 暂不直接解析，请先另存为 PDF 或复制文本粘贴';
+      return;
+    } else {
+      text = await f.text();
+    }
+    $('resumeText').value = text.trim();
+    $('resumeStatus').className = 'text-xs text-emerald-600 mt-1';
+    $('resumeStatus').textContent = `✓ 已提取 ${text.length} 字符`;
+  } catch (err) {
+    $('resumeStatus').className = 'text-xs text-rose-600 mt-1';
+    $('resumeStatus').textContent = '❌ 解析失败：' + err.message;
+  }
+});
+
+$('demoBtn').addEventListener('click', () => {
+  $('candName').value = '李明';
+  $('claimYears').value = '5';
+  $('expectSalary').value = '15';
+  $('resumeText').value = '李明，5 年互联网运营经验。\n2020-2025 某厂高级运营，负责 APP 用户增长与活动策划。\n核心项目：双 11 大促拉新，单日新增用户 12 万，活动 ROI 1:4.2。\n技能：数据分析（GA4/SQL）、内容文案、PR/PS、AI 工具应用。\n获奖：2023 年度优秀员工。';
+  $('transcript').value = '面试官：介绍一下你最有成就感的项目。\n候选人：嗯……我之前在公司做过一个比较大的活动，主要是负责一些运营工作。我们团队大概十几个人，一起把这个事情做下来了。我个人主要做一些执行的事情，沟通能力和团队合作都比较好。\n面试官：具体效果数据是多少？\n候选人：呃……具体数字我有点记不清了，等一下我查一下简历。我们做了很多降本增效、闭环、抓手的工作。\n面试官：你用过 GA4 哪些功能？\n候选人：这个问题您能再说一遍吗？信号好像不太好。';
+});
+</script>
+</body>
+</html>
