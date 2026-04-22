@@ -267,11 +267,13 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-// API Key 优先从 localStorage 读取，避免硬编码到 GitHub
-const DEFAULT_KEY = localStorage.getItem('deepseek_key') || '';
+// 内置 key 供团队共用；若用户手填则优先用用户自己的
+const BUILTIN_KEY = 'sk-f6278db3334e4078983b887c5d1c2126';
+const DEFAULT_KEY = localStorage.getItem('deepseek_key') || BUILTIN_KEY;
 $('apiKey').value = DEFAULT_KEY;
 $('apiKey').addEventListener('change', () => {
-  if ($('apiKey').value.trim()) localStorage.setItem('deepseek_key', $('apiKey').value.trim());
+  const v = $('apiKey').value.trim();
+  if (v && v !== BUILTIN_KEY) localStorage.setItem('deepseek_key', v);
 });
 
 let JD_ROWS = [];        // 解析后的 JD 列表
