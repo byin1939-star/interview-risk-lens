@@ -370,10 +370,9 @@ async function tryFetchCsv(csvUrl) {
   throw err;
 }
 
-// 已知的多公司 sheet 标签 gid（悦达 + 无极 同时拉取）
+// 使用「汇总表」(gid=853903640)，覆盖全部 9 个项目组（悦达/无极/瑞升/领航/恒睿/逸品/万有引力/高档中央/台湾悦达）
 const KNOWN_GIDS = [
-  { gid: '1446787248', label: '悦达' },
-  { gid: '807744883',  label: '无极' },
+  { gid: '853903640', label: '汇总表' },
 ];
 
 async function fetchOneGid(baseUrl, gid) {
@@ -444,7 +443,7 @@ $('rosterFile').addEventListener('change', e => {
 
 function uniq(arr) { return [...new Set(arr.filter(Boolean))]; }
 
-const FIXED_PROJECTS = ['悦达', '无极'];
+const FIXED_PROJECTS = ['悦达', '无极', '瑞升', '领航', '恒睿', '逸品', '万有引力', '高档中央', '台湾悦达'];
 function fillProjectSelect() {
   const sel = $('projSelect');
   sel.disabled = false;
