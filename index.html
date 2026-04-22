@@ -365,26 +365,40 @@ async function tryFetchCsv(csvUrl) {
   throw err;
 }
 
+// 已知的多公司 sheet 标签 gid（悦达 + 无极 同时拉取）
+const KNOWN_GIDS = [
+  { gid: '1446787248', label: '悦达' },
+  { gid: '807744883',  label: '无极' },
+];
+
+async function fetchOneGid(baseUrl, gid) {
+  const csvUrl = baseUrl.replace(/gid=\d+/, 'gid=' + gid);
+  const result = await tryFetchCsv(csvUrl);
+  if (result.rows) return result.rows;
+  const wb = XLSX.read(result.csv, { type: 'string' });
+  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: null });
+}
+
 $('fetchJdBtn').addEventListener('click', async () => {
   const url = $('jdUrl').value.trim();
   const csvUrl = gsheetCsvUrl(url);
   if (!csvUrl) { alert('URL 格式不对，应为 Google Sheet 链接'); return; }
   $('jdInfo').className = 'mt-2 text-xs text-slate-500';
-  $('jdInfo').textContent = '正在拉取在线表格…';
+  $('jdInfo').textContent = '正在拉取多公司在线表格…';
   try {
-    const result = await tryFetchCsv(csvUrl);
-    let rows;
-    if (result.rows) {
-      rows = result.rows;
-    } else {
-      const wb = XLSX.read(result.csv, { type: 'string' });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+    const all = [];
+    const log = [];
+    for (const { gid, label } of KNOWN_GIDS) {
+      try {
+        const rows = await fetchOneGid(csvUrl, gid);
+        rows.forEach(r => { if (!r['项目组']) r['项目组'] = label; });
+        all.push(...rows);
+        log.push(`${label}(${rows.length})`);
+      } catch (e) { log.push(`${label}失败:${e.message}`); }
     }
-    const via = result.via;
-    if (!rows.length) throw new Error('表格为空或表头无法识别');
-    loadJDData(rows);
-    $('jdInfo').textContent = `✓ 通过【${via}】加载 ${JD_ROWS.length} 个有效岗位`;
+    if (!all.length) throw new Error('全部 sheet 拉取失败');
+    loadJDData(all);
+    $('jdInfo').textContent = `✓ 加载 ${JD_ROWS.length} 个有效岗位 [${log.join(' / ')}]`;
   } catch (e) {
     $('jdInfo').className = 'mt-2 text-xs text-rose-600 leading-relaxed';
     const detail = (e.log || []).map(l => `· ${l}`).join('<br>');
