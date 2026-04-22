@@ -418,10 +418,12 @@ $('rosterFile').addEventListener('change', e => {
 
 function uniq(arr) { return [...new Set(arr.filter(Boolean))]; }
 
+const FIXED_PROJECTS = ['悦达', '无极'];
 function fillProjectSelect() {
   const sel = $('projSelect');
   sel.disabled = false;
-  const projs = uniq(JD_ROWS.map(r => r['项目组']));
+  const projsFromData = uniq(JD_ROWS.map(r => r['项目组']));
+  const projs = uniq([...FIXED_PROJECTS, ...projsFromData]);
   sel.innerHTML = '<option value="">全部项目组</option>' + projs.map(p => `<option>${p}</option>`).join('');
   fillDeptSelect();
 }
@@ -431,8 +433,12 @@ function fillDeptSelect() {
   sel.disabled = false;
   const proj = $('projSelect').value;
   const pool = proj ? JD_ROWS.filter(r => r['项目组'] === proj) : JD_ROWS;
-  const depts = uniq(pool.map(r => r['部门']));
-  sel.innerHTML = '<option value="">全部部门</option>' + depts.map(d => `<option>${d}</option>`).join('');
+  // 仅运营序列部门
+  const depts = uniq(pool.map(r => r['部门'])).filter(d => /运营/.test(d || ''));
+  sel.innerHTML = '<option value="">全部运营部门</option>' + depts.map(d => `<option>${d}</option>`).join('');
+  if (!depts.length && proj === '无极') {
+    sel.innerHTML += '<option value="" disabled>（暂无 无极 运营岗位 JD，可走薪资对标）</option>';
+  }
   fillJobSelect();
 }
 
@@ -470,9 +476,12 @@ function parseSalaryRange(s) {
   return { min: parseFloat(m[1]), max: parseFloat(m[2]) };
 }
 
-function buildSalaryBenchmark(jobLevel, jobName) {
-  // 取运营序列中相同/相近职级的转正后薪资作为对标
-  const ops = ROSTER_ROWS.filter(o => /运营/.test(String(o['部门']||o['编制组织']||'')));
+function buildSalaryBenchmark(jobLevel, jobName, company) {
+  // 取「同公司 + 运营序列」中相同/相近职级的转正后薪资作为对标
+  let ops = ROSTER_ROWS.filter(o => /运营/.test(String(o['部门']||o['编制组织']||'')));
+  if (company) {
+    ops = ops.filter(o => String(o['服务单位']||'').includes(company));
+  }
   const sameLevel = ops.filter(o => String(o['职级']||'').toUpperCase() === String(jobLevel||'').toUpperCase());
   const target = sameLevel.length >= 3 ? sameLevel : ops;
   const salaries = target.map(o => parseFloat(o['转正后薪资'])).filter(v => v > 0);
@@ -676,7 +685,8 @@ async function runAnalysis(useAI) {
   const discountPct = parseFloat($('discount').value);
 
   // 计算公司内薪资对标
-  const bench = ROSTER_ROWS.length ? buildSalaryBenchmark(SELECTED_JOB['职级'], SELECTED_JOB['岗位名称']) : null;
+  const company = $('projSelect').value || SELECTED_JOB['项目组'] || '';
+  const bench = ROSTER_ROWS.length ? buildSalaryBenchmark(SELECTED_JOB['职级'], SELECTED_JOB['岗位名称'], company) : null;
 
   if (useAI) {
     $('apiStatus').innerHTML = '<span class="loading"></span> 正在调用 DeepSeek 分析中（约 10-30 秒）…';
