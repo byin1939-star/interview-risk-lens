@@ -212,9 +212,35 @@
 
   <!-- 数据看板 -->
   <section id="dashboard" class="glass rounded-2xl p-6 shadow-xl">
+    <!-- 云端后端配置 -->
+    <div class="mb-4 p-3 border border-indigo-200 bg-indigo-50 rounded-lg">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs font-semibold text-slate-700">☁️ 团队共享后端 (Google Sheets Web App URL)：</span>
+        <input id="backendUrl" type="text" class="flex-1 min-w-[280px] p-1.5 border border-slate-300 rounded text-xs font-mono" placeholder="留空则仅本地存储；填入后所有 HRBP 共享同一份数据" />
+        <button id="saveBackendBtn" class="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">保存</button>
+        <button id="syncPushBtn" class="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded hover:bg-slate-50">⬆️ 推本地到云</button>
+        <button id="syncPullBtn" class="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded hover:bg-slate-50">⬇️ 拉云到本地</button>
+        <details class="ml-auto text-xs">
+          <summary class="cursor-pointer text-indigo-600">📖 如何配置？</summary>
+          <div class="absolute right-8 mt-2 p-4 bg-white border border-slate-300 rounded-lg shadow-xl text-xs w-[480px] z-50 leading-relaxed">
+            <b>5 步接入 Google Sheets（10 分钟）：</b><br>
+            1. 新建一张 Google Sheet，第一行填表头：<br>
+            <code class="bg-slate-100 p-1 rounded text-xs">id,ts,candName,jobName,project,jdLevel,score,level,expectK,offerK,decision,retention</code><br>
+            2. 扩展程序 → Apps Script → 新建脚本，粘贴下方代码<br>
+            3. 把代码里 <code>SHEET_ID</code> 换成你 Sheet URL 中的 ID<br>
+            4. 点「部署」→「新建部署」→ 类型「Web 应用」→ 执行身份「我」→ 访问权限「任何人」<br>
+            5. 复制生成的 Web App URL 粘贴到左侧输入框 → 保存<br><br>
+            <b>Apps Script 代码</b>（点击复制）：<br>
+            <textarea id="appsScriptCode" readonly rows="8" class="w-full p-2 bg-slate-50 border border-slate-200 rounded text-xs font-mono" onclick="this.select()"></textarea>
+            <button id="copyAppsScriptBtn" class="mt-1 px-2 py-1 bg-slate-100 rounded text-xs">📋 复制代码</button>
+          </div>
+        </details>
+      </div>
+      <div id="backendStatus" class="mt-1 text-xs text-slate-500"></div>
+    </div>
     <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
       <h2 class="text-lg font-bold text-slate-800 flex items-center">
-        <span class="step-num">📊</span>历史数据看板（本地累积 · 面试越多越准）
+        <span class="step-num">📊</span>历史数据看板（面试越多越准）
       </h2>
       <div class="flex gap-2">
         <select id="dashMonth" class="p-1.5 border border-slate-300 rounded text-xs bg-white">
@@ -335,23 +361,132 @@ let ROSTER_ROWS = [];    // 解析后的花名册行
 let SELECTED_JOB = null;
 let charts = {};
 
-/* ========== 历史记录存储 ========== */
+/* ========== 历史记录存储（本地 + Google Sheets 云同步）========== */
 const REC_KEY = 'interview_records_v1';
+const BACKEND_KEY = 'backend_url_v1';
+function getBackendUrl() { return localStorage.getItem(BACKEND_KEY) || ''; }
 function loadRecords() {
   try { return JSON.parse(localStorage.getItem(REC_KEY) || '[]'); } catch { return []; }
 }
 function saveRecords(arr) { localStorage.setItem(REC_KEY, JSON.stringify(arr)); }
+
+async function cloudPost(payload) {
+  const url = getBackendUrl(); if (!url) return null;
+  try {
+    // 用 text/plain 绕过 CORS 预检（Apps Script 的要求）
+    const r = await fetch(url, { method: 'POST', body: JSON.stringify(payload), headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+    return await r.json();
+  } catch (e) { console.warn('cloud post failed', e); return null; }
+}
+async function cloudGet() {
+  const url = getBackendUrl(); if (!url) return null;
+  try { const r = await fetch(url); return await r.json(); }
+  catch (e) { console.warn('cloud get failed', e); return null; }
+}
+
 function addRecord(rec) {
+  const full = { id: Date.now() + '_' + Math.floor(Math.random()*1e4), ...rec };
   const arr = loadRecords();
-  arr.unshift({ id: Date.now() + '_' + Math.floor(Math.random()*1e4), ...rec });
+  arr.unshift(full);
   saveRecords(arr);
   renderDashboard();
+  // 异步推送到云，不阻塞 UI
+  if (getBackendUrl()) cloudPost({ action: 'add', record: full });
 }
 function updateRecord(id, patch) {
   const arr = loadRecords();
   const i = arr.findIndex(r => r.id === id);
   if (i >= 0) { arr[i] = { ...arr[i], ...patch }; saveRecords(arr); renderDashboard(); }
+  if (getBackendUrl()) cloudPost({ action: 'update', id, patch });
 }
+
+async function syncPull() {
+  $('backendStatus').textContent = '⏳ 正在从云端拉取…';
+  const data = await cloudGet();
+  if (!data) { $('backendStatus').textContent = '❌ 拉取失败，请检查后端 URL / 网络'; return; }
+  // 合并：以 id 去重，云端数据优先
+  const local = loadRecords();
+  const map = new Map();
+  [...local, ...data].forEach(r => { if (r && r.id) map.set(r.id, r); });
+  const merged = Array.from(map.values()).sort((a,b)=>(b.ts||'').localeCompare(a.ts||''));
+  saveRecords(merged);
+  renderDashboard();
+  $('backendStatus').textContent = `✓ 拉取成功：云端 ${data.length} 条，合并后本地 ${merged.length} 条`;
+}
+async function syncPush() {
+  $('backendStatus').textContent = '⏳ 正在推送本地数据到云端…';
+  const local = loadRecords();
+  let ok = 0, fail = 0;
+  for (const r of local) {
+    const res = await cloudPost({ action: 'add', record: r });
+    if (res && res.ok) ok++; else fail++;
+  }
+  $('backendStatus').textContent = `✓ 推送完成：成功 ${ok} 条，失败 ${fail} 条`;
+}
+
+const APPS_SCRIPT_TEMPLATE = `const SHEET_ID = '把这里换成你的Sheet ID';  // 从 URL 中 /d/后面那串
+const SHEET_NAME = 'Sheet1';
+
+function doGet(e) {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return json([]);
+  const headers = data[0];
+  const rows = data.slice(1).map(r => {
+    const o = {}; headers.forEach((h,i) => o[h] = r[i]); return o;
+  });
+  return json(rows);
+}
+function doPost(e) {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+  const d = JSON.parse(e.postData.contents);
+  const headers = sheet.getDataRange().getValues()[0];
+  if (d.action === 'add') {
+    sheet.appendRow(headers.map(h => d.record[h] ?? ''));
+  } else if (d.action === 'update') {
+    const all = sheet.getDataRange().getValues();
+    const idCol = headers.indexOf('id');
+    for (let i = 1; i < all.length; i++) {
+      if (String(all[i][idCol]) === String(d.id)) {
+        Object.keys(d.patch).forEach(k => {
+          const c = headers.indexOf(k);
+          if (c >= 0) sheet.getRange(i+1, c+1).setValue(d.patch[k]);
+        });
+        break;
+      }
+    }
+  } else if (d.action === 'clear') {
+    sheet.clear();
+    sheet.appendRow(['id','ts','candName','jobName','project','jdLevel','score','level','expectK','offerK','decision','retention']);
+  }
+  return json({ ok: true });
+}
+function json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}`;
+
+// 初始化后端配置 UI
+setTimeout(() => {
+  const saved = getBackendUrl();
+  if (saved) {
+    $('backendUrl').value = saved;
+    $('backendStatus').textContent = '✓ 已配置云端后端，新记录会自动同步';
+  }
+  $('appsScriptCode').value = APPS_SCRIPT_TEMPLATE;
+  $('saveBackendBtn').addEventListener('click', () => {
+    const v = $('backendUrl').value.trim();
+    localStorage.setItem(BACKEND_KEY, v);
+    $('backendStatus').textContent = v ? '✓ 已保存。建议先点「拉云到本地」初始化' : '⚠️ 已清空，回到纯本地模式';
+  });
+  $('syncPullBtn').addEventListener('click', syncPull);
+  $('syncPushBtn').addEventListener('click', syncPush);
+  $('copyAppsScriptBtn').addEventListener('click', () => {
+    navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
+    $('copyAppsScriptBtn').textContent = '✓ 已复制';
+    setTimeout(() => $('copyAppsScriptBtn').textContent = '📋 复制代码', 1500);
+  });
+}, 50);
 
 function filterRecords(scope) {
   const all = loadRecords();
@@ -521,8 +656,13 @@ window.handleRecAction = (id, field, value) => {
 };
 
 $('dashMonth').addEventListener('change', renderDashboard);
-$('clearRecordsBtn').addEventListener('click', () => {
-  if (confirm('确定清空全部历史记录？此操作不可恢复。')) { saveRecords([]); renderDashboard(); }
+$('clearRecordsBtn').addEventListener('click', async () => {
+  if (!confirm('确定清空全部历史记录？此操作不可恢复。')) return;
+  saveRecords([]);
+  if (getBackendUrl() && confirm('同时清空云端 Google Sheet 数据吗？')) {
+    await cloudPost({ action: 'clear' });
+  }
+  renderDashboard();
 });
 $('exportBtn').addEventListener('click', () => {
   const recs = loadRecords();
