@@ -364,7 +364,9 @@ let charts = {};
 /* ========== 历史记录存储（本地 + Google Sheets 云同步）========== */
 const REC_KEY = 'interview_records_v1';
 const BACKEND_KEY = 'backend_url_v1';
-function getBackendUrl() { return localStorage.getItem(BACKEND_KEY) || ''; }
+// 团队共享默认后端（连到同一张 Google Sheet「面试记录数据库」）
+const BUILTIN_BACKEND = 'https://script.google.com/macros/s/AKfycbxDf_014qXdxKBWM7l51uFiS_BzItHiOpRj7Tww95MHLaz0ak-BCFFVC6y2uJJdv_eAHQ/exec';
+function getBackendUrl() { return localStorage.getItem(BACKEND_KEY) || BUILTIN_BACKEND; }
 function loadRecords() {
   try { return JSON.parse(localStorage.getItem(REC_KEY) || '[]'); } catch { return []; }
 }
@@ -485,12 +487,9 @@ function json(obj) {
 // 初始化后端配置 UI
 setTimeout(async () => {
   const saved = getBackendUrl();
-  if (saved) {
-    $('backendUrl').value = saved;
-    $('backendStatus').textContent = '✓ 已配置云端后端，正在拉取团队最新数据…';
-    // 页面加载时自动拉取一次，保证看到的是团队全员数据
-    await syncPull();
-  }
+  $('backendUrl').value = saved;
+  $('backendStatus').textContent = '✓ 已连接团队共享后端，正在拉取最新数据…';
+  await syncPull();
   $('appsScriptCode').value = APPS_SCRIPT_TEMPLATE;
   $('saveBackendBtn').addEventListener('click', () => {
     const v = $('backendUrl').value.trim();
