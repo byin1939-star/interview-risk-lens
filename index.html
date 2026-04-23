@@ -224,8 +224,8 @@
           <summary class="cursor-pointer text-indigo-600">📖 如何配置？</summary>
           <div class="absolute right-8 mt-2 p-4 bg-white border border-slate-300 rounded-lg shadow-xl text-xs w-[480px] z-50 leading-relaxed">
             <b>5 步接入 Google Sheets（10 分钟）：</b><br>
-            1. 新建一张 Google Sheet，第一行填表头：<br>
-            <code class="bg-slate-100 p-1 rounded text-xs">id,ts,candName,jobName,project,jdLevel,score,level,expectK,offerK,decision,retention</code><br>
+            1. 新建一张 Google Sheet，第一行填中文表头（复制粘贴到 A1）：<br>
+            <code class="bg-slate-100 p-1 rounded text-xs select-all">ID　时间　候选人　岗位　项目组　JD职级　AI分数　AI职级　期望薪资K　建议offerK　处置　留存</code><br>
             2. 扩展程序 → Apps Script → 新建脚本，粘贴下方代码<br>
             3. 把代码里 <code>SHEET_ID</code> 换成你 Sheet URL 中的 ID<br>
             4. 点「部署」→「新建部署」→ 类型「Web 应用」→ 执行身份「我」→ 访问权限「任何人」<br>
@@ -425,7 +425,15 @@ async function syncPush() {
 }
 
 const APPS_SCRIPT_TEMPLATE = `const SHEET_ID = '把这里换成你的Sheet ID';  // 从 URL 中 /d/后面那串
-const SHEET_NAME = 'Sheet1';
+const SHEET_NAME = '工作表1';  // 如果你的 sheet 标签叫别的名字改这里
+
+// 中文表头 ↔ 内部字段映射（表里用中文，代码用英文）
+const FIELD_MAP = {
+  'ID': 'id', '时间': 'ts', '候选人': 'candName', '岗位': 'jobName',
+  '项目组': 'project', 'JD职级': 'jdLevel', 'AI分数': 'score', 'AI职级': 'level',
+  '期望薪资K': 'expectK', '建议offerK': 'offerK', '处置': 'decision', '留存': 'retention'
+};
+const CH_HEADERS = Object.keys(FIELD_MAP);
 
 function doGet(e) {
   const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
@@ -433,7 +441,12 @@ function doGet(e) {
   if (data.length < 2) return json([]);
   const headers = data[0];
   const rows = data.slice(1).map(r => {
-    const o = {}; headers.forEach((h,i) => o[h] = r[i]); return o;
+    const o = {};
+    headers.forEach((h, i) => {
+      const k = FIELD_MAP[h] || h;
+      o[k] = r[i];
+    });
+    return o;
   });
   return json(rows);
 }
@@ -442,14 +455,17 @@ function doPost(e) {
   const d = JSON.parse(e.postData.contents);
   const headers = sheet.getDataRange().getValues()[0];
   if (d.action === 'add') {
-    sheet.appendRow(headers.map(h => d.record[h] ?? ''));
+    sheet.appendRow(headers.map(h => {
+      const k = FIELD_MAP[h] || h;
+      return d.record[k] ?? '';
+    }));
   } else if (d.action === 'update') {
     const all = sheet.getDataRange().getValues();
-    const idCol = headers.indexOf('id');
+    const idCol = headers.findIndex(h => (FIELD_MAP[h] || h) === 'id');
     for (let i = 1; i < all.length; i++) {
       if (String(all[i][idCol]) === String(d.id)) {
         Object.keys(d.patch).forEach(k => {
-          const c = headers.indexOf(k);
+          const c = headers.findIndex(h => (FIELD_MAP[h] || h) === k);
           if (c >= 0) sheet.getRange(i+1, c+1).setValue(d.patch[k]);
         });
         break;
@@ -457,7 +473,7 @@ function doPost(e) {
     }
   } else if (d.action === 'clear') {
     sheet.clear();
-    sheet.appendRow(['id','ts','candName','jobName','project','jdLevel','score','level','expectK','offerK','decision','retention']);
+    sheet.appendRow(CH_HEADERS);
   }
   return json({ ok: true });
 }
