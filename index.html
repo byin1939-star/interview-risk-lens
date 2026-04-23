@@ -483,11 +483,13 @@ function json(obj) {
 }`;
 
 // 初始化后端配置 UI
-setTimeout(() => {
+setTimeout(async () => {
   const saved = getBackendUrl();
   if (saved) {
     $('backendUrl').value = saved;
-    $('backendStatus').textContent = '✓ 已配置云端后端，新记录会自动同步';
+    $('backendStatus').textContent = '✓ 已配置云端后端，正在拉取团队最新数据…';
+    // 页面加载时自动拉取一次，保证看到的是团队全员数据
+    await syncPull();
   }
   $('appsScriptCode').value = APPS_SCRIPT_TEMPLATE;
   $('saveBackendBtn').addEventListener('click', () => {
@@ -1003,8 +1005,40 @@ async function callDeepSeek(prompt) {
   return JSON.parse(data.choices[0].message.content);
 }
 
+function buildHistoryContext(job) {
+  // 取同岗位历史记录（以及全局）供 AI 校准
+  const all = loadRecords();
+  if (!all.length) return '';
+  const sameJob = all.filter(r => r.jobName === job?.['岗位名称']);
+  const sameLevel = all.filter(r => r.jdLevel === job?.['职级']);
+
+  const statOf = (arr) => {
+    if (!arr.length) return null;
+    const scores = arr.map(r => r.score || 0).filter(Boolean);
+    const hired = arr.filter(r => r.decision === 'hired' || r.decision === 'offered').length;
+    const rejected = arr.filter(r => r.decision === 'rejected').length;
+    const retained = arr.filter(r => ['30d','90d','180d'].includes(r.retention)).length;
+    const avg = scores.length ? Math.round(scores.reduce((s,v)=>s+v,0)/scores.length) : 0;
+    const passScores = arr.filter(r => r.decision === 'hired' || r.decision === 'offered').map(r => r.score).filter(Boolean);
+    const passAvg = passScores.length ? Math.round(passScores.reduce((s,v)=>s+v,0)/passScores.length) : 0;
+    return { n: arr.length, avg, passAvg, hired, rejected, retained };
+  };
+
+  let ctx = '\n【团队历史校准数据（AI 必须参考以对齐团队标准）】\n';
+  ctx += `全局：累计面试 ${all.length} 人，`;
+  const gs = statOf(all);
+  if (gs) ctx += `平均 AI 分 ${gs.avg}，通过 ${gs.hired}，拒绝 ${gs.rejected}，实际入职且留存 ${gs.retained}，通过者平均分 ${gs.passAvg}\n`;
+  const js = statOf(sameJob);
+  if (js && js.n >= 2) ctx += `同岗位「${job['岗位名称']}」：${js.n} 人，均分 ${js.avg}，通过者均分 ${js.passAvg}，通过 ${js.hired} 拒绝 ${js.rejected}\n`;
+  const ls = statOf(sameLevel);
+  if (ls && ls.n >= 2) ctx += `同职级「${job['职级']}」：${ls.n} 人，均分 ${ls.avg}，通过者均分 ${ls.passAvg}\n`;
+  if (gs && gs.passAvg > 0) ctx += `⚠️ 校准要求：当前候选人评分应对齐上述通过者均分水平 ${gs.passAvg}。低于该值的候选人基本不应推荐。\n`;
+  return ctx;
+}
+
 function buildPrompt(ctx) {
   const { job, resume, transcript, candName, claimYears, edu, expectSalary, salaryBench, discountPct } = ctx;
+  const historyCtx = buildHistoryContext(job);
   return `请对以下候选人进行多维评估，输出 **严格 JSON**（不要任何额外说明文字）。
 
 【应聘岗位】
@@ -1026,6 +1060,7 @@ ${transcript.slice(0, 4000)}
 
 【公司同岗位薪资对标（来自花名册）】
 ${salaryBench ? `样本数 ${salaryBench.count}，P25=${salaryBench.p25}，中位=${salaryBench.med}，P75=${salaryBench.p75}，平均=${salaryBench.avg.toFixed(0)}（单位元/月）` : '无足够样本'}
+${historyCtx}
 
 【任务】请输出如下结构的 JSON：
 {
