@@ -210,6 +210,60 @@
     <div id="apiStatus" class="mt-3 text-xs text-slate-500"></div>
   </section>
 
+  <!-- 数据看板 -->
+  <section id="dashboard" class="glass rounded-2xl p-6 shadow-xl">
+    <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
+      <h2 class="text-lg font-bold text-slate-800 flex items-center">
+        <span class="step-num">📊</span>历史数据看板（本地累积 · 面试越多越准）
+      </h2>
+      <div class="flex gap-2">
+        <select id="dashMonth" class="p-1.5 border border-slate-300 rounded text-xs bg-white">
+          <option value="all">全部时间</option>
+          <option value="30">近 30 天</option>
+          <option value="90">近 90 天</option>
+          <option value="current">本月</option>
+        </select>
+        <button id="exportBtn" class="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded hover:bg-slate-50">📥 导出 CSV</button>
+        <button id="clearRecordsBtn" class="px-3 py-1.5 text-xs bg-white border border-rose-300 text-rose-600 rounded hover:bg-rose-50">🗑️ 清空</button>
+      </div>
+    </div>
+
+    <!-- KPI 卡片 -->
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3" id="kpiCards"></div>
+
+    <!-- 图表 -->
+    <div class="grid md:grid-cols-2 gap-5 mt-5">
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-xs font-semibold text-slate-600 mb-2">📈 每日面试趋势 + 通过率</div>
+        <canvas id="trendChart" height="160"></canvas>
+      </div>
+      <div class="border border-slate-200 rounded-lg p-3">
+        <div class="text-xs font-semibold text-slate-600 mb-2">🧩 岗位分布 & 通过情况</div>
+        <canvas id="positionChart" height="160"></canvas>
+      </div>
+    </div>
+
+    <!-- 智能校准建议 -->
+    <div id="calibration" class="mt-5 p-4 bg-indigo-50 border border-indigo-200 rounded-lg text-sm text-slate-700 hidden"></div>
+
+    <!-- 记录表 -->
+    <details class="mt-5">
+      <summary class="cursor-pointer text-sm font-semibold text-slate-700 py-2">📋 明细记录 (点击展开)</summary>
+      <div class="overflow-x-auto mt-2">
+        <table class="w-full text-xs">
+          <thead class="bg-slate-100">
+            <tr class="text-left">
+              <th class="p-2">日期</th><th class="p-2">候选人</th><th class="p-2">岗位</th>
+              <th class="p-2">AI 分</th><th class="p-2">AI 职级</th><th class="p-2">offer K</th>
+              <th class="p-2">处置</th><th class="p-2">留存</th><th class="p-2"></th>
+            </tr>
+          </thead>
+          <tbody id="recTable"></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
   <!-- 结果区 -->
   <section id="resultBox" class="hidden space-y-6">
 
@@ -280,6 +334,212 @@ let JD_ROWS = [];        // 解析后的 JD 列表
 let ROSTER_ROWS = [];    // 解析后的花名册行
 let SELECTED_JOB = null;
 let charts = {};
+
+/* ========== 历史记录存储 ========== */
+const REC_KEY = 'interview_records_v1';
+function loadRecords() {
+  try { return JSON.parse(localStorage.getItem(REC_KEY) || '[]'); } catch { return []; }
+}
+function saveRecords(arr) { localStorage.setItem(REC_KEY, JSON.stringify(arr)); }
+function addRecord(rec) {
+  const arr = loadRecords();
+  arr.unshift({ id: Date.now() + '_' + Math.floor(Math.random()*1e4), ...rec });
+  saveRecords(arr);
+  renderDashboard();
+}
+function updateRecord(id, patch) {
+  const arr = loadRecords();
+  const i = arr.findIndex(r => r.id === id);
+  if (i >= 0) { arr[i] = { ...arr[i], ...patch }; saveRecords(arr); renderDashboard(); }
+}
+
+function filterRecords(scope) {
+  const all = loadRecords();
+  const now = new Date();
+  if (scope === 'all') return all;
+  if (scope === '30') return all.filter(r => (now - new Date(r.ts)) / 86400000 <= 30);
+  if (scope === '90') return all.filter(r => (now - new Date(r.ts)) / 86400000 <= 90);
+  if (scope === 'current') {
+    const ym = now.toISOString().slice(0, 7);
+    return all.filter(r => (r.ts || '').startsWith(ym));
+  }
+  return all;
+}
+
+/* ========== 看板渲染 ========== */
+function renderDashboard() {
+  const scope = $('dashMonth').value;
+  const recs = filterRecords(scope);
+  const total = recs.length;
+  const passed = recs.filter(r => r.decision === 'hired' || r.decision === 'offered').length;
+  const rejected = recs.filter(r => r.decision === 'rejected' || r.level === '不通过').length;
+  const retained = recs.filter(r => r.retention === '30d' || r.retention === '90d' || r.retention === '180d').length;
+  const avgScore = total ? Math.round(recs.reduce((s,r)=>s+(r.score||0),0)/total) : 0;
+  const passRate = total ? Math.round(passed/total*100) : 0;
+  const retRate = passed ? Math.round(retained/passed*100) : 0;
+
+  $('kpiCards').innerHTML = [
+    { l: '面试总人数', v: total, c: 'text-slate-800' },
+    { l: '通过 / 已发 offer', v: passed, c: 'text-emerald-600' },
+    { l: '通过率', v: passRate + '%', c: 'text-indigo-600' },
+    { l: '平均 AI 分', v: avgScore, c: 'text-amber-600' },
+    { l: '留存率 (≥30天)', v: retRate + '%', c: 'text-purple-600' },
+  ].map(k => `<div class="border border-slate-200 rounded-lg p-3 bg-white">
+    <div class="text-xs text-slate-500">${k.l}</div>
+    <div class="text-2xl font-black ${k.c} mt-1">${k.v}</div></div>`).join('');
+
+  // 每日趋势（近 30 天 or scope）
+  const byDay = {};
+  recs.forEach(r => {
+    const d = (r.ts || '').slice(0, 10);
+    if (!byDay[d]) byDay[d] = { total: 0, pass: 0 };
+    byDay[d].total++;
+    if (r.decision === 'hired' || r.decision === 'offered') byDay[d].pass++;
+  });
+  const days = Object.keys(byDay).sort();
+  if (charts.trend) charts.trend.destroy();
+  if (days.length) {
+    charts.trend = new Chart($('trendChart'), {
+      type: 'bar',
+      data: {
+        labels: days,
+        datasets: [
+          { label: '面试人数', data: days.map(d => byDay[d].total), backgroundColor: '#6366f1', borderRadius: 4, yAxisID: 'y' },
+          { label: '通过人数', data: days.map(d => byDay[d].pass), backgroundColor: '#10b981', borderRadius: 4, yAxisID: 'y' }
+        ]
+      },
+      options: { scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }, plugins: { legend: { position: 'bottom' } } }
+    });
+  }
+
+  // 岗位分布
+  const byJob = {};
+  recs.forEach(r => {
+    const k = r.jobName || '未知岗位';
+    if (!byJob[k]) byJob[k] = { total: 0, pass: 0 };
+    byJob[k].total++;
+    if (r.decision === 'hired' || r.decision === 'offered') byJob[k].pass++;
+  });
+  const jobs = Object.keys(byJob).sort((a,b)=>byJob[b].total-byJob[a].total).slice(0, 8);
+  if (charts.position) charts.position.destroy();
+  if (jobs.length) {
+    charts.position = new Chart($('positionChart'), {
+      type: 'bar',
+      data: {
+        labels: jobs,
+        datasets: [
+          { label: '面试', data: jobs.map(j => byJob[j].total), backgroundColor: '#94a3b8', borderRadius: 4 },
+          { label: '通过', data: jobs.map(j => byJob[j].pass), backgroundColor: '#10b981', borderRadius: 4 }
+        ]
+      },
+      options: { indexAxis: 'y', scales: { x: { beginAtZero: true, ticks: { stepSize: 1 } } }, plugins: { legend: { position: 'bottom' } } }
+    });
+  }
+
+  // 智能校准建议
+  renderCalibration(recs);
+
+  // 表格
+  $('recTable').innerHTML = recs.slice(0, 50).map(r => {
+    const decClass = r.decision === 'hired' ? 'bg-emerald-100 text-emerald-700'
+                   : r.decision === 'offered' ? 'bg-indigo-100 text-indigo-700'
+                   : r.decision === 'rejected' ? 'bg-rose-100 text-rose-700'
+                   : 'bg-slate-100 text-slate-600';
+    const decTxt = { hired: '已入职', offered: '已发offer', rejected: '拒绝', pending: '待定' }[r.decision] || '待定';
+    return `<tr class="border-b border-slate-100 hover:bg-slate-50">
+      <td class="p-2">${(r.ts||'').slice(0,10)}</td>
+      <td class="p-2 font-medium">${r.candName||''}</td>
+      <td class="p-2">${r.jobName||''}</td>
+      <td class="p-2 font-bold">${r.score||'-'}</td>
+      <td class="p-2">${r.level||'-'}</td>
+      <td class="p-2">${r.offerK ? r.offerK + 'K' : '-'}</td>
+      <td class="p-2"><span class="badge ${decClass}">${decTxt}</span></td>
+      <td class="p-2 text-xs">${r.retention ? '✓ ' + r.retention : '-'}</td>
+      <td class="p-2">
+        <select onchange="handleRecAction('${r.id}','decision',this.value)" class="text-xs border rounded p-0.5">
+          <option value="">处置</option>
+          <option value="offered">发offer</option>
+          <option value="hired">已入职</option>
+          <option value="rejected">拒绝</option>
+          <option value="pending">待定</option>
+        </select>
+        <select onchange="handleRecAction('${r.id}','retention',this.value)" class="text-xs border rounded p-0.5 ml-1">
+          <option value="">留存</option>
+          <option value="30d">30天</option>
+          <option value="90d">90天</option>
+          <option value="180d">180天</option>
+          <option value="left">离职</option>
+        </select>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="9" class="text-center text-slate-400 p-4">暂无记录。完成一次 AI 评估后会自动入库。</td></tr>';
+}
+
+function renderCalibration(recs) {
+  const box = $('calibration');
+  if (recs.length < 5) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  // 判断 AI 评估与最终决策一致性（模型表现评估）
+  const withDec = recs.filter(r => r.decision && r.decision !== 'pending');
+  let falsePositive = 0, falseNegative = 0; // AI 高分但被拒 / AI 低分但被录
+  withDec.forEach(r => {
+    if (r.score >= 65 && r.decision === 'rejected') falsePositive++;
+    if (r.score < 55 && (r.decision === 'hired' || r.decision === 'offered')) falseNegative++;
+  });
+  // 岗位平均
+  const byJob = {};
+  recs.forEach(r => {
+    const k = r.jobName || '-';
+    byJob[k] = byJob[k] || [];
+    byJob[k].push(r.score || 0);
+  });
+  const jobStats = Object.entries(byJob)
+    .filter(([, arr]) => arr.length >= 3)
+    .map(([j, arr]) => ({ job: j, n: arr.length, avg: Math.round(arr.reduce((s,v)=>s+v,0)/arr.length) }))
+    .sort((a,b)=>b.n-a.n);
+
+  let html = `<b>🧠 智能校准（基于 ${recs.length} 条历史记录）</b><br>`;
+  if (jobStats.length) {
+    html += `<div class="mt-2">📌 岗位历史均分（当前候选人可对比）：</div><ul class="list-disc list-inside mt-1 text-xs">`;
+    jobStats.slice(0, 5).forEach(s => {
+      html += `<li><b>${s.job}</b> · 历史 ${s.n} 人 · 平均 AI 分 <b>${s.avg}</b></li>`;
+    });
+    html += '</ul>';
+  }
+  if (falsePositive + falseNegative > 0) {
+    html += `<div class="mt-2 text-xs">⚙️ 模型一致性：AI 建议通过但被拒 <b>${falsePositive}</b> 人，AI 建议拒绝但录用 <b>${falseNegative}</b> 人。`;
+    if (falsePositive > falseNegative + 2) html += ' 建议放宽通过阈值（候选人普遍比 AI 打分保守）。';
+    else if (falseNegative > falsePositive + 2) html += ' 建议收紧通过阈值（AI 倾向乐观）。';
+    html += '</div>';
+  }
+  box.innerHTML = html;
+}
+
+window.handleRecAction = (id, field, value) => {
+  if (!value) return;
+  updateRecord(id, { [field]: value });
+};
+
+$('dashMonth').addEventListener('change', renderDashboard);
+$('clearRecordsBtn').addEventListener('click', () => {
+  if (confirm('确定清空全部历史记录？此操作不可恢复。')) { saveRecords([]); renderDashboard(); }
+});
+$('exportBtn').addEventListener('click', () => {
+  const recs = loadRecords();
+  if (!recs.length) { alert('暂无记录'); return; }
+  const headers = ['日期','候选人','岗位','项目组','职级JD','AI分','AI职级','期望K','建议K','处置','留存'];
+  const lines = [headers.join(',')].concat(recs.map(r => [
+    (r.ts||'').slice(0,10), r.candName||'', r.jobName||'', r.project||'', r.jdLevel||'',
+    r.score||'', r.level||'', r.expectK||'', r.offerK||'', r.decision||'', r.retention||''
+  ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')));
+  const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `面试记录_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+});
+// 启动时先渲染一次
+setTimeout(renderDashboard, 100);
 
 /* ========== 文件解析 ========== */
 function parseSheet(file, cb) {
@@ -753,6 +1013,33 @@ function renderAll(result) {
   }).join('') || '<div class="text-sm text-slate-500">未发现明显风险</div>';
 
   $('questions').innerHTML = (result.follow_up_questions || []).map(q => `<li>${q}</li>`).join('');
+
+  // 自动入库 + 历史对比提示
+  const candName = $('candName').value.trim() || '候选人';
+  const expectK = parseFloat($('expectSalary').value) || 0;
+  addRecord({
+    ts: new Date().toISOString(),
+    candName, jobName: SELECTED_JOB?.['岗位名称'] || '',
+    project: SELECTED_JOB?.['项目组'] || '',
+    jdLevel: SELECTED_JOB?.['职级'] || '',
+    score: total, level: recLvl,
+    expectK, offerK: ss.recommended_offer_k,
+    decision: recLvl === '不通过' ? 'rejected' : 'pending',
+    retention: ''
+  });
+
+  // 和同岗位历史均分对比
+  const hist = loadRecords().filter(r => r.jobName === SELECTED_JOB?.['岗位名称'] && r.id);
+  if (hist.length >= 4) {
+    const scores = hist.map(r => r.score).filter(Boolean);
+    const avg = Math.round(scores.reduce((s,v)=>s+v,0)/scores.length);
+    const delta = total - avg;
+    const tip = delta >= 10 ? `📈 高于同岗位历史均分 ${delta} 分，候选人较优`
+             : delta <= -10 ? `📉 低于同岗位历史均分 ${-delta} 分，候选人较弱`
+             : `≈ 与同岗位历史均分接近（差 ${Math.abs(delta)} 分）`;
+    v.innerHTML += `<div class="mt-2 text-xs text-slate-600">🧠 历史对比（${hist.length} 人）：均分 ${avg} · ${tip}</div>`;
+  }
+
   $('resultBox').scrollIntoView({behavior:'smooth'});
 }
 
