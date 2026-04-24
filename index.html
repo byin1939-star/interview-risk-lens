@@ -789,9 +789,12 @@ async function tryFetchCsv(csvUrl) {
   throw err;
 }
 
-// 使用「汇总表」(gid=853903640)，覆盖全部 9 个项目组（悦达/无极/瑞升/领航/恒睿/逸品/万有引力/高档中央/台湾悦达）
+// 优先使用独立公司 tab（最新），缺失的公司从汇总表补齐
+// 顺序重要：后拉的覆盖前拉的同键记录
 const KNOWN_GIDS = [
-  { gid: '853903640', label: '汇总表' },
+  { gid: '853903640',  label: '汇总表' },    // 先拉（补其他公司）
+  { gid: '1446787248', label: '悦达' },      // 覆盖
+  { gid: '807744883',  label: '无极' },      // 覆盖
 ];
 
 async function fetchOneGid(baseUrl, gid) {
@@ -815,17 +818,26 @@ $('fetchJdBtn').addEventListener('click', async () => {
     );
     const all = [];
     const log = [];
+    // 用 Map 去重：key = 项目组|部门|岗位名称|职级，后拉的覆盖前拉的
+    const dedup = new Map();
     settled.forEach((res, i) => {
       const { label } = KNOWN_GIDS[i];
       if (res.status === 'fulfilled') {
         const rows = res.value;
-        rows.forEach(r => { if (!r['项目组']) r['项目组'] = label; });
-        all.push(...rows);
-        log.push(`${label}(${rows.length})`);
+        let added = 0;
+        rows.forEach(r => {
+          if (!r['项目组'] && label !== '汇总表') r['项目组'] = label;
+          if (!r['岗位名称']) return;
+          const key = [r['项目组']||'', r['部门']||'', r['岗位名称']||'', r['职级']||''].join('|');
+          dedup.set(key, r);
+          added++;
+        });
+        log.push(`${label}(${added})`);
       } else {
         log.push(`${label}失败:${(res.reason && res.reason.message) || res.reason}`);
       }
     });
+    all.push(...dedup.values());
     if (!all.length) throw new Error('全部 sheet 拉取失败');
     loadJDData(all);
     $('jdInfo').textContent = `✓ 加载 ${JD_ROWS.length} 个有效岗位 [${log.join(' / ')}]`;
