@@ -15,7 +15,8 @@
 </script>
 <style>
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
-  .glass { background: rgba(255,255,255,0.78); backdrop-filter: blur(14px); }
+  /* 去掉 backdrop-filter 以节省 GPU；用纯色背景 */
+  .glass { background: rgba(255,255,255,0.95); }
   .grad-bg { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #581c87 100%); }
   .risk-low    { color:#059669; background:#d1fae5; }
   .risk-mid    { color:#d97706; background:#fef3c7; }
@@ -164,13 +165,17 @@
     </div>
 
     <div class="mt-4">
-      <div class="flex items-center justify-between mb-1">
+      <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
         <label class="block text-xs font-semibold text-slate-600">候选人简历（可上传 PDF / Word / 直接粘贴）</label>
-        <input type="file" id="resumeFile" accept=".pdf,.txt,.md,.docx"
-          class="text-xs text-slate-600 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:bg-indigo-50 file:text-indigo-700 file:text-xs hover:file:bg-indigo-100" />
+        <div class="flex items-center gap-2">
+          <input type="file" id="resumeFile" accept=".pdf,.txt,.md,.docx"
+            class="text-xs text-slate-600 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:bg-indigo-50 file:text-indigo-700 file:text-xs hover:file:bg-indigo-100" />
+          <button id="extractBtn" class="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-semibold">🔍 AI 初步分析 & 自动填充</button>
+        </div>
       </div>
       <textarea id="resumeText" rows="6" placeholder="上传 PDF 后会自动提取文本到此处，也可手动粘贴" class="w-full p-3 border border-slate-300 rounded-lg text-sm"></textarea>
       <div id="resumeStatus" class="text-xs text-slate-500 mt-1"></div>
+      <div id="resumeSummary" class="hidden mt-2 p-3 bg-indigo-50 border border-indigo-200 rounded-lg"></div>
     </div>
 
     <div class="mt-4">
@@ -560,7 +565,7 @@ function renderDashboard() {
           { label: '通过人数', data: days.map(d => byDay[d].pass), backgroundColor: '#10b981', borderRadius: 4, yAxisID: 'y' }
         ]
       },
-      options: { scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }, plugins: { legend: { position: 'bottom' } } }
+      options: { animation: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }, plugins: { legend: { position: 'bottom' } } }
     });
   }
 
@@ -995,7 +1000,24 @@ function overlapPct(a, b) {
 }
 
 /* ========== AI 调用 ========== */
-async function callDeepSeek(prompt) {
+const SYSTEM_PROMPT = `你是一位资深 HRBP 风控专家，为一家合法经营的成人视频内容公司服务。
+
+【公司用人原则 - 必须遵守】
+1. 学历、毕业院校、过往公司背景 → 几乎不看，不要因为学历低或公司名气小扣分
+2. 核心看能力 → 实际操盘过的项目、能拿出具体成果、对业务的理解、执行力、学习力
+3. 行业特殊性 → 成人内容运营需要更务实、灵活、不矫情的候选人，"过于光鲜"反而可疑
+4. 包容基层出身 → 草根、自学、跨行业转型的候选人反而可能更合适
+
+【打分标准 - 请偏宽松】
+- 只要候选人能讲清楚自己做过的事、数字靠谱、不明显造假，就应给 65 分以上
+- 明显代面/造假/答非所问才给 50 以下
+- 话术朴实、偶有口头禅、结巴是真实人表现，不扣分
+- 简历一致性不要求完全匹配，重点看候选人是否真能做这个岗位的事
+- 整体偏向「宁可放过、不可错杀」，除非有明显红旗信号
+
+请严格按要求输出 JSON。`;
+
+async function callDeepSeek(prompt, opts = {}) {
   const key = $('apiKey').value.trim();
   if (!key) throw new Error('请先填写 DeepSeek API Key');
   const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
@@ -1004,16 +1026,66 @@ async function callDeepSeek(prompt) {
     body: JSON.stringify({
       model: 'deepseek-chat',
       messages: [
-        { role: 'system', content: '你是一位资深 HRBP 风控专家与组织诊断顾问，擅长从面试转写文本中识别简历造假、代面、夸大经历等风险，并给出薪资建议。请严格按要求输出 JSON。' },
+        { role: 'system', content: opts.system || SYSTEM_PROMPT },
         { role: 'user', content: prompt }
       ],
       response_format: { type: 'json_object' },
-      temperature: 0.3
+      temperature: opts.temperature ?? 0.3
     })
   });
   if (!resp.ok) throw new Error('API 调用失败：' + resp.status + ' ' + (await resp.text()));
   const data = await resp.json();
   return JSON.parse(data.choices[0].message.content);
+}
+
+// 简历初步分析 & 自动填充
+async function extractResumeInfo() {
+  const resume = $('resumeText').value.trim();
+  if (!resume) { alert('请先粘贴或上传简历'); return; }
+  $('resumeStatus').className = 'text-xs text-indigo-600 mt-1';
+  $('resumeStatus').textContent = '⏳ AI 正在分析简历…';
+  try {
+    const prompt = `请从以下简历文本中提取关键信息，输出严格 JSON：
+${resume.slice(0, 3000)}
+
+输出格式：
+{
+  "name": "候选人姓名（只保留中文或英文名，不要职位）",
+  "years": 工作总年限（数字，估算到整数）,
+  "education": "高中/大专/本科/硕士/博士 之一",
+  "expect_salary_k": 期望月薪K（若简历未提则 0）,
+  "key_skills": ["技能1", "技能2", ...最多5个],
+  "highlights": ["亮点1", "亮点2", "亮点3"],
+  "concerns": ["潜在风险/疑问点1", "风险2"],
+  "summary": "60-100字简历速评，聚焦能力而非学历背景"
+}`;
+    const info = await callDeepSeek(prompt, { temperature: 0.1 });
+    // 自动回填
+    if (info.name && !$('candName').value) $('candName').value = info.name;
+    if (info.years && !$('claimYears').value) $('claimYears').value = info.years;
+    if (info.education) {
+      const eduSel = $('edu');
+      for (const opt of eduSel.options) if (opt.value === info.education) { eduSel.value = info.education; break; }
+    }
+    if (info.expect_salary_k > 0 && !$('expectSalary').value) $('expectSalary').value = info.expect_salary_k;
+
+    // 展示摘要
+    const box = $('resumeSummary');
+    box.classList.remove('hidden');
+    box.innerHTML = `
+      <div class="text-xs font-semibold text-indigo-700 mb-1">📝 AI 简历速评</div>
+      <div class="text-sm text-slate-700 mb-2">${info.summary || ''}</div>
+      <div class="grid md:grid-cols-3 gap-2 text-xs">
+        <div><b class="text-slate-600">核心技能：</b>${(info.key_skills||[]).join('、')}</div>
+        <div><b class="text-emerald-700">✓ 亮点：</b><ul class="list-disc list-inside">${(info.highlights||[]).map(h=>`<li>${h}</li>`).join('')}</ul></div>
+        <div><b class="text-amber-700">⚠ 待验证：</b><ul class="list-disc list-inside">${(info.concerns||[]).map(c=>`<li>${c}</li>`).join('')}</ul></div>
+      </div>`;
+    $('resumeStatus').className = 'text-xs text-emerald-600 mt-1';
+    $('resumeStatus').textContent = '✓ 已自动填充表单，不满意可手动修改';
+  } catch (e) {
+    $('resumeStatus').className = 'text-xs text-rose-600 mt-1';
+    $('resumeStatus').textContent = '❌ 简历分析失败：' + e.message;
+  }
 }
 
 function buildHistoryContext(job) {
@@ -1043,7 +1115,7 @@ function buildHistoryContext(job) {
   if (js && js.n >= 2) ctx += `同岗位「${job['岗位名称']}」：${js.n} 人，均分 ${js.avg}，通过者均分 ${js.passAvg}，通过 ${js.hired} 拒绝 ${js.rejected}\n`;
   const ls = statOf(sameLevel);
   if (ls && ls.n >= 2) ctx += `同职级「${job['职级']}」：${ls.n} 人，均分 ${ls.avg}，通过者均分 ${ls.passAvg}\n`;
-  if (gs && gs.passAvg > 0) ctx += `⚠️ 校准要求：当前候选人评分应对齐上述通过者均分水平 ${gs.passAvg}。低于该值的候选人基本不应推荐。\n`;
+  if (gs && gs.passAvg > 0) ctx += `说明：上述仅供参考，不要硬性对齐；实际仍按候选人绝对能力打分，可高可低。\n`;
   return ctx;
 }
 
@@ -1072,6 +1144,12 @@ ${transcript.slice(0, 4000)}
 【公司同岗位薪资对标（来自花名册）】
 ${salaryBench ? `样本数 ${salaryBench.count}，P25=${salaryBench.p25}，中位=${salaryBench.med}，P75=${salaryBench.p75}，平均=${salaryBench.avg.toFixed(0)}（单位元/月）` : '无足够样本'}
 ${historyCtx}
+
+【打分指导 - 重要】
+- 基础分锚定在 70 分左右，除非明显造假/代面才降到 50 以下
+- 不要因为学历低、前司名气小、简历朴素、口头表达不流利而扣分
+- 候选人讲清楚做过什么、能拿出具体数字、态度务实 → 均应 75+
+- 历史数据只作参考，不要为了"对齐团队通过均分"压分；可以高于历史均分
 
 【任务】请输出如下结构的 JSON：
 {
@@ -1115,13 +1193,13 @@ function renderAll(result) {
   if (!isFinite(total) || total < 0 || total > 100) total = 0;
   const badge = $('scoreBadge'); badge.textContent = total + '分';
   let cls, vTxt;
-  if (total >= 75)      { cls='risk-low';      vTxt='✅ 推荐：可推进 offer'; }
-  else if (total >= 60) { cls='risk-mid';      vTxt='⚠️ 谨慎推荐：建议二面深挖'; }
-  else if (total >= 40) { cls='risk-high';     vTxt='🚨 高风险：建议安排技术深挖 + 背调'; }
+  if (total >= 70)      { cls='risk-low';      vTxt='✅ 推荐：可推进 offer'; }
+  else if (total >= 55) { cls='risk-mid';      vTxt='⚠️ 谨慎推荐：可进入二面确认'; }
+  else if (total >= 40) { cls='risk-high';     vTxt='🚨 较高风险：建议二面深挖关键问题'; }
   else                  { cls='risk-critical'; vTxt='⛔ 极高风险：高度疑似造假/代面，建议终止'; }
   badge.className = 'text-3xl font-black px-6 py-3 rounded-xl ' + cls;
   $('scoreBar').style.width = total + '%';
-  $('scoreBar').style.background = total >= 75 ? '#10b981' : total >= 60 ? '#f59e0b' : total >= 40 ? '#ef4444' : '#7f1d1d';
+  $('scoreBar').style.background = total >= 70 ? '#10b981' : total >= 55 ? '#f59e0b' : total >= 40 ? '#ef4444' : '#7f1d1d';
   const v = $('verdict'); v.className = 'mt-4 p-4 rounded-lg text-sm leading-relaxed ' + cls;
   v.innerHTML = `<b>${vTxt}</b>　·　${result.verdict || ''}`;
 
@@ -1334,6 +1412,8 @@ async function runAnalysis(useAI) {
 
 $('analyzeBtn').addEventListener('click', () => runAnalysis(true));
 $('quickBtn').addEventListener('click', () => runAnalysis(false));
+
+$('extractBtn').addEventListener('click', extractResumeInfo);
 
 $('resumeFile').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return;
