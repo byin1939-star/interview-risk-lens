@@ -1021,7 +1021,7 @@ async function callDeepSeek(prompt, opts = {}) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
     body: JSON.stringify({
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-pro',
       messages: [
         { role: 'system', content: opts.system || SYSTEM_PROMPT },
         { role: 'user', content: prompt }
