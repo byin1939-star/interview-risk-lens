@@ -7,6 +7,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
   if (window['pdfjsLib']) {
@@ -189,7 +190,7 @@
     <div class="grid md:grid-cols-3 gap-4">
       <div class="md:col-span-2">
         <label class="block text-xs font-semibold text-slate-600 mb-1">DeepSeek API Key</label>
-        <input id="apiKey" type="password" placeholder="sk-... （首次填入后浏览器本地保存，不会上传 git）"
+        <input id="apiKey" type="password" placeholder="已内置团队 Key；也可改填个人 Key（仅浏览器本地保存）"
           class="w-full p-2 border border-slate-300 rounded-lg text-sm font-mono" />
       </div>
       <div>
@@ -349,13 +350,18 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-// 内置 key 供团队共用；若用户手填则优先用用户自己的
-const BUILTIN_KEY = 'sk-f6278db3334e4078983b887c5d1c2126';
+const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[ch]));
+const optionHTML = (value, label = value) => `<option value="${escapeHTML(value)}">${escapeHTML(label)}</option>`;
+
+const BUILTIN_KEY = 'sk-1fe50bb27ecd4960b790dff4e05af5a9';
 const DEFAULT_KEY = localStorage.getItem('deepseek_key') || BUILTIN_KEY;
 $('apiKey').value = DEFAULT_KEY;
 $('apiKey').addEventListener('change', () => {
   const v = $('apiKey').value.trim();
   if (v && v !== BUILTIN_KEY) localStorage.setItem('deepseek_key', v);
+  else localStorage.removeItem('deepseek_key');
 });
 
 let JD_ROWS = [];        // 解析后的 JD 列表
@@ -366,8 +372,7 @@ let charts = {};
 /* ========== 历史记录存储（本地 + Google Sheets 云同步）========== */
 const REC_KEY = 'interview_records_v1';
 const BACKEND_KEY = 'backend_url_v1';
-// 团队共享默认后端（连到同一张 Google Sheet「面试记录数据库」）
-const BUILTIN_BACKEND = 'https://script.google.com/macros/s/AKfycbxDf_014qXdxKBWM7l51uFiS_BzItHiOpRj7Tww95MHLaz0ak-BCFFVC6y2uJJdv_eAHQ/exec';
+const BUILTIN_BACKEND = '';
 function getBackendUrl() { return localStorage.getItem(BACKEND_KEY) || BUILTIN_BACKEND; }
 function loadRecords() {
   try { return JSON.parse(localStorage.getItem(REC_KEY) || '[]'); } catch { return []; }
@@ -405,6 +410,10 @@ function updateRecord(id, patch) {
 }
 
 async function syncPull() {
+  if (!getBackendUrl()) {
+    $('backendStatus').textContent = '当前为纯本地模式；填写 Google Sheets Web App URL 后可同步。';
+    return;
+  }
   $('backendStatus').textContent = '⏳ 正在从云端拉取…';
   const data = await cloudGet();
   if (!data) { $('backendStatus').textContent = '❌ 拉取失败，请检查后端 URL / 网络'; return; }
@@ -418,6 +427,10 @@ async function syncPull() {
   $('backendStatus').textContent = `✓ 拉取成功：云端 ${data.length} 条，合并后本地 ${merged.length} 条`;
 }
 async function syncPush() {
+  if (!getBackendUrl()) {
+    $('backendStatus').textContent = '当前为纯本地模式；填写 Google Sheets Web App URL 后可同步。';
+    return;
+  }
   $('backendStatus').textContent = '⏳ 正在推送本地数据到云端…';
   const local = loadRecords();
   let ok = 0, fail = 0;
@@ -490,12 +503,17 @@ function json(obj) {
 setTimeout(async () => {
   const saved = getBackendUrl();
   $('backendUrl').value = saved;
-  $('backendStatus').textContent = '✓ 已连接团队共享后端，正在拉取最新数据…';
-  await syncPull();
+  if (saved) {
+    $('backendStatus').textContent = '✓ 已连接团队共享后端，正在拉取最新数据…';
+    await syncPull();
+  } else {
+    $('backendStatus').textContent = '当前为纯本地模式；填写 URL 后可启用团队同步。';
+  }
   $('appsScriptCode').value = APPS_SCRIPT_TEMPLATE;
   $('saveBackendBtn').addEventListener('click', () => {
     const v = $('backendUrl').value.trim();
-    localStorage.setItem(BACKEND_KEY, v);
+    if (v) localStorage.setItem(BACKEND_KEY, v);
+    else localStorage.removeItem(BACKEND_KEY);
     $('backendStatus').textContent = v ? '✓ 已保存。建议先点「拉云到本地」初始化' : '⚠️ 已清空，回到纯本地模式';
   });
   $('syncPullBtn').addEventListener('click', syncPull);
@@ -600,24 +618,27 @@ function renderDashboard() {
                    : r.decision === 'rejected' ? 'bg-rose-100 text-rose-700'
                    : 'bg-slate-100 text-slate-600';
     const decTxt = { hired: '已入职', offered: '已发offer', rejected: '拒绝', pending: '待定' }[r.decision] || '待定';
+    const recId = escapeHTML(r.id || '');
+    const offerText = r.offerK ? `${escapeHTML(r.offerK)}K` : '-';
+    const retentionText = r.retention ? `✓ ${escapeHTML(r.retention)}` : '-';
     return `<tr class="border-b border-slate-100 hover:bg-slate-50">
-      <td class="p-2">${(r.ts||'').slice(0,10)}</td>
-      <td class="p-2 font-medium">${r.candName||''}</td>
-      <td class="p-2">${r.jobName||''}</td>
-      <td class="p-2 font-bold">${r.score||'-'}</td>
-      <td class="p-2">${r.level||'-'}</td>
-      <td class="p-2">${r.offerK ? r.offerK + 'K' : '-'}</td>
+      <td class="p-2">${escapeHTML((r.ts||'').slice(0,10))}</td>
+      <td class="p-2 font-medium">${escapeHTML(r.candName||'')}</td>
+      <td class="p-2">${escapeHTML(r.jobName||'')}</td>
+      <td class="p-2 font-bold">${escapeHTML(r.score||'-')}</td>
+      <td class="p-2">${escapeHTML(r.level||'-')}</td>
+      <td class="p-2">${offerText}</td>
       <td class="p-2"><span class="badge ${decClass}">${decTxt}</span></td>
-      <td class="p-2 text-xs">${r.retention ? '✓ ' + r.retention : '-'}</td>
+      <td class="p-2 text-xs">${retentionText}</td>
       <td class="p-2">
-        <select onchange="handleRecAction('${r.id}','decision',this.value)" class="text-xs border rounded p-0.5">
+        <select data-rec-id="${recId}" data-rec-field="decision" class="text-xs border rounded p-0.5">
           <option value="">处置</option>
           <option value="offered">发offer</option>
           <option value="hired">已入职</option>
           <option value="rejected">拒绝</option>
           <option value="pending">待定</option>
         </select>
-        <select onchange="handleRecAction('${r.id}','retention',this.value)" class="text-xs border rounded p-0.5 ml-1">
+        <select data-rec-id="${recId}" data-rec-field="retention" class="text-xs border rounded p-0.5 ml-1">
           <option value="">留存</option>
           <option value="30d">30天</option>
           <option value="90d">90天</option>
@@ -656,7 +677,7 @@ function renderCalibration(recs) {
   if (jobStats.length) {
     html += `<div class="mt-2">📌 岗位历史均分（当前候选人可对比）：</div><ul class="list-disc list-inside mt-1 text-xs">`;
     jobStats.slice(0, 5).forEach(s => {
-      html += `<li><b>${s.job}</b> · 历史 ${s.n} 人 · 平均 AI 分 <b>${s.avg}</b></li>`;
+      html += `<li><b>${escapeHTML(s.job)}</b> · 历史 ${s.n} 人 · 平均 AI 分 <b>${s.avg}</b></li>`;
     });
     html += '</ul>';
   }
@@ -669,10 +690,11 @@ function renderCalibration(recs) {
   box.innerHTML = html;
 }
 
-window.handleRecAction = (id, field, value) => {
-  if (!value) return;
-  updateRecord(id, { [field]: value });
-};
+$('recTable').addEventListener('change', (e) => {
+  const target = e.target;
+  if (!target.matches('select[data-rec-id][data-rec-field]') || !target.value) return;
+  updateRecord(target.dataset.recId, target.dataset.recField, target.value);
+});
 
 $('dashMonth').addEventListener('change', renderDashboard);
 $('clearRecordsBtn').addEventListener('click', async () => {
@@ -845,8 +867,8 @@ $('fetchJdBtn').addEventListener('click', async () => {
     $('jdInfo').textContent = `✓ 加载 ${JD_ROWS.length} 个有效岗位 [${log.join(' / ')}]`;
   } catch (e) {
     $('jdInfo').className = 'mt-2 text-xs text-rose-600 leading-relaxed';
-    const detail = (e.log || []).map(l => `· ${l}`).join('<br>');
-    $('jdInfo').innerHTML = `❌ 拉取失败：${e.message}<br><b>各通道详情：</b><br>${detail}<br><span class="text-slate-600">可改用本地 xlsx 上传兜底</span>`;
+    const detail = (e.log || []).map(l => `· ${escapeHTML(l)}`).join('<br>');
+    $('jdInfo').innerHTML = `❌ 拉取失败：${escapeHTML(e.message)}<br><b>各通道详情：</b><br>${detail}<br><span class="text-slate-600">可改用本地 xlsx 上传兜底</span>`;
   }
 });
 
@@ -882,7 +904,7 @@ function fillProjectSelect() {
   sel.disabled = false;
   const projsFromData = uniq(JD_ROWS.map(r => r['项目组']));
   const projs = uniq([...FIXED_PROJECTS, ...projsFromData]);
-  sel.innerHTML = '<option value="">全部项目组</option>' + projs.map(p => `<option>${p}</option>`).join('');
+  sel.innerHTML = optionHTML('', '全部项目组') + projs.map(p => optionHTML(p)).join('');
   fillDeptSelect();
 }
 
@@ -893,7 +915,7 @@ function fillDeptSelect() {
   const pool = proj ? JD_ROWS.filter(r => r['项目组'] === proj) : JD_ROWS;
   // 仅运营序列部门
   const depts = uniq(pool.map(r => r['部门'])).filter(d => /运营/.test(d || ''));
-  sel.innerHTML = '<option value="">全部运营部门</option>' + depts.map(d => `<option>${d}</option>`).join('');
+  sel.innerHTML = optionHTML('', '全部运营部门') + depts.map(d => optionHTML(d)).join('');
   if (!depts.length && proj === '无极') {
     sel.innerHTML += '<option value="" disabled>（暂无 无极 运营岗位 JD，可走薪资对标）</option>';
   }
@@ -907,9 +929,9 @@ function fillJobSelect() {
   const pool = JD_ROWS.filter(r =>
     (!proj || r['项目组'] === proj) && (!dept || r['部门'] === dept)
   );
-  sel.innerHTML = '<option value="">— 请选择岗位 —</option>' + pool.map(j => {
+  sel.innerHTML = optionHTML('', '— 请选择岗位 —') + pool.map(j => {
     const idx = JD_ROWS.indexOf(j);
-    return `<option value="${idx}">${j['岗位名称']} (${j['职级']||''}) · ${j['底薪范围']||''} · ${j['状态']||''}</option>`;
+    return optionHTML(idx, `${j['岗位名称']} (${j['职级']||''}) · ${j['底薪范围']||''} · ${j['状态']||''}`);
   }).join('');
 }
 
@@ -1069,13 +1091,16 @@ ${resume.slice(0, 3000)}
     // 展示摘要
     const box = $('resumeSummary');
     box.classList.remove('hidden');
+    const skills = (info.key_skills || []).map(escapeHTML).join('、');
+    const highlights = (info.highlights || []).map(h => `<li>${escapeHTML(h)}</li>`).join('');
+    const concerns = (info.concerns || []).map(c => `<li>${escapeHTML(c)}</li>`).join('');
     box.innerHTML = `
       <div class="text-xs font-semibold text-indigo-700 mb-1">📝 AI 简历速评</div>
-      <div class="text-sm text-slate-700 mb-2">${info.summary || ''}</div>
+      <div class="text-sm text-slate-700 mb-2">${escapeHTML(info.summary || '')}</div>
       <div class="grid md:grid-cols-3 gap-2 text-xs">
-        <div><b class="text-slate-600">核心技能：</b>${(info.key_skills||[]).join('、')}</div>
-        <div><b class="text-emerald-700">✓ 亮点：</b><ul class="list-disc list-inside">${(info.highlights||[]).map(h=>`<li>${h}</li>`).join('')}</ul></div>
-        <div><b class="text-amber-700">⚠ 待验证：</b><ul class="list-disc list-inside">${(info.concerns||[]).map(c=>`<li>${c}</li>`).join('')}</ul></div>
+        <div><b class="text-slate-600">核心技能：</b>${skills}</div>
+        <div><b class="text-emerald-700">✓ 亮点：</b><ul class="list-disc list-inside">${highlights}</ul></div>
+        <div><b class="text-amber-700">⚠ 待验证：</b><ul class="list-disc list-inside">${concerns}</ul></div>
       </div>`;
     $('resumeStatus').className = 'text-xs text-emerald-600 mt-1';
     $('resumeStatus').textContent = '✓ 已自动填充表单，不满意可手动修改';
@@ -1198,7 +1223,7 @@ function renderAll(result) {
   $('scoreBar').style.width = total + '%';
   $('scoreBar').style.background = total >= 70 ? '#10b981' : total >= 55 ? '#f59e0b' : total >= 40 ? '#ef4444' : '#7f1d1d';
   const v = $('verdict'); v.className = 'mt-4 p-4 rounded-lg text-sm leading-relaxed ' + cls;
-  v.innerHTML = `<b>${vTxt}</b>　·　${result.verdict || ''}`;
+  v.innerHTML = `<b>${vTxt}</b>　·　${escapeHTML(result.verdict || '')}`;
 
   // 推荐职级（含"不通过"兜底校正）
   let lr = result.level_recommendation || {};
@@ -1227,10 +1252,10 @@ function renderAll(result) {
   lvlBox.innerHTML = `
     <div class="flex items-center gap-4 flex-wrap">
       <div class="text-xs text-slate-600">🎖️ AI 职级评定</div>
-      <div class="text-2xl font-black ${lvlColor} tracking-wider">${recLvl}</div>
-      <div class="text-xs text-slate-500">${matchTip}</div>
+      <div class="text-2xl font-black ${lvlColor} tracking-wider">${escapeHTML(recLvl)}</div>
+      <div class="text-xs text-slate-500">${escapeHTML(matchTip)}</div>
     </div>
-    <div class="text-xs text-slate-700 mt-2 leading-relaxed">${lr.reason || ''}</div>`;
+    <div class="text-xs text-slate-700 mt-2 leading-relaxed">${escapeHTML(lr.reason || '')}</div>`;
 
   // 面试柱状图
   const dims = result.interview_scores || {};
@@ -1274,8 +1299,8 @@ function renderAll(result) {
     }]},
     options: { scales: { y: { beginAtZero:true } }, plugins: { legend:{display:false} } }
   });
-  $('salaryRec').innerHTML = `<b>💡 薪资建议：</b> ${ss.reason || '-'}<br>
-    <b>建议 offer：${ss.recommended_offer_k || '-'}K</b> · 市场中位 ${ss.market_median_k||'-'}K · 候选人期望 ${ss.candidate_expect_k||'-'}K`;
+  $('salaryRec').innerHTML = `<b>💡 薪资建议：</b> ${escapeHTML(ss.reason || '-')}<br>
+    <b>建议 offer：${escapeHTML(ss.recommended_offer_k || '-')}K</b> · 市场中位 ${escapeHTML(ss.market_median_k||'-')}K · 候选人期望 ${escapeHTML(ss.candidate_expect_k||'-')}K`;
 
   // AI 报告
   $('aiReport').textContent = result.report || '';
@@ -1286,10 +1311,10 @@ function renderAll(result) {
     const tag = {low:'低', mid:'中', high:'高', critical:'极高'}[f.level] || '提示';
     return `<div class="flex items-start gap-3 p-3 border border-slate-200 rounded-lg">
       <span class="badge ${map[f.level]||'risk-mid'}">${tag}</span>
-      <span class="text-slate-700 flex-1">${f.text}</span></div>`;
+      <span class="text-slate-700 flex-1">${escapeHTML(f.text)}</span></div>`;
   }).join('') || '<div class="text-sm text-slate-500">未发现明显风险</div>';
 
-  $('questions').innerHTML = (result.follow_up_questions || []).map(q => `<li>${q}</li>`).join('');
+  $('questions').innerHTML = (result.follow_up_questions || []).map(q => `<li>${escapeHTML(q)}</li>`).join('');
 
   // 自动入库 + 历史对比提示
   const candName = $('candName').value.trim() || '候选人';
@@ -1314,7 +1339,7 @@ function renderAll(result) {
     const tip = delta >= 10 ? `📈 高于同岗位历史均分 ${delta} 分，候选人较优`
              : delta <= -10 ? `📉 低于同岗位历史均分 ${-delta} 分，候选人较弱`
              : `≈ 与同岗位历史均分接近（差 ${Math.abs(delta)} 分）`;
-    v.innerHTML += `<div class="mt-2 text-xs text-slate-600">🧠 历史对比（${hist.length} 人）：均分 ${avg} · ${tip}</div>`;
+    v.innerHTML += `<div class="mt-2 text-xs text-slate-600">🧠 历史对比（${hist.length} 人）：均分 ${avg} · ${escapeHTML(tip)}</div>`;
   }
 
   $('resultBox').scrollIntoView({behavior:'smooth'});
@@ -1354,7 +1379,7 @@ async function runAnalysis(useAI) {
       $('apiStatus').innerHTML = '<span class="pulse-dot"></span> AI 分析完成';
       renderAll(result);
     } catch (e) {
-      $('apiStatus').innerHTML = '<span class="text-rose-600">❌ ' + e.message + '</span><br>已自动降级为本地启发式分析';
+      $('apiStatus').innerHTML = '<span class="text-rose-600">❌ ' + escapeHTML(e.message) + '</span><br>已自动降级为本地启发式分析';
       runLocal();
     } finally {
       $('analyzeBtn').disabled = false;
@@ -1429,12 +1454,10 @@ $('resumeFile').addEventListener('change', async (e) => {
       }
       text = parts.join('\n\n');
     } else if (ext === 'docx') {
-      // 简易 docx：解压后取 word/document.xml 的 <w:t> 文本
       const buf = await f.arrayBuffer();
-      const u8 = new Uint8Array(buf);
-      // 用 SheetJS 的 zip 不方便，简单提示
-      $('resumeStatus').textContent = '⚠️ docx 暂不直接解析，请先另存为 PDF 或复制文本粘贴';
-      return;
+      if (!window.mammoth) throw new Error('DOCX 解析库未加载，请刷新后重试');
+      const result = await mammoth.extractRawText({ arrayBuffer: buf });
+      text = result.value || '';
     } else {
       text = await f.text();
     }
