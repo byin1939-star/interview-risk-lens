@@ -61,7 +61,7 @@
       <label class="block text-sm font-semibold text-slate-700 mb-2">📋 在线岗位需求表 (Google Sheet URL)</label>
       <div class="flex gap-2 items-stretch">
         <input id="jdUrl" type="text" class="flex-1 min-w-0 p-2 border border-slate-300 rounded-lg text-sm font-mono"
-          value="https://docs.google.com/spreadsheets/d/1YJewXWDnl6KX3QcVbJS8dX74_raE3ixY2frRqW3zLX4/edit?gid=1446787248" />
+          value="https://docs.google.com/spreadsheets/d/1Dwjyf71siGUAP1kGiMJY2mTMr4IFD9Ma0GNS9fn9Atc/edit?gid=0#gid=0" />
         <button id="fetchJdBtn" class="whitespace-nowrap px-5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold text-sm">⬇️ 拉取在线 JD</button>
       </div>
       <div id="jdInfo" class="mt-2 text-xs text-slate-500">点击右侧「拉取」自动加载。Sheet 需设为「拥有链接的人可查看」。</div>
@@ -732,8 +732,47 @@ function parseSheet(file, cb) {
   reader.readAsArrayBuffer(file);
 }
 
+function firstValue(row, keys) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return '';
+}
+
+function parseHeadcount(value) {
+  const n = parseInt(String(value ?? '').match(/\d+/)?.[0] || '0', 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeJDRow(row) {
+  const jobName = firstValue(row, ['岗位名称', '职位', '岗位', '职位名称']);
+  if (!jobName || /统一字段岗位名/.test(String(jobName))) return null;
+  const remark = firstValue(row, ['备注']);
+  const arrived = firstValue(row, ['已到岗', '到岗人数']) || (String(remark).match(/已到岗\s*(\d+)/)?.[1] || '');
+  const hc = firstValue(row, ['HC总需求', '需求人数', 'HC', '招聘人数']);
+  const hcNum = parseHeadcount(hc);
+  const arrivedNum = parseHeadcount(arrived);
+  const status = firstValue(row, ['状态', '招聘状态']) || (hcNum && arrivedNum >= hcNum ? '已满' : '招聘中');
+  if (status === '已关闭') return null;
+  return {
+    ...row,
+    '项目组': firstValue(row, ['项目组', '项目', '公司', '业务线']),
+    '部门': firstValue(row, ['部门', '所属部门']),
+    '岗位名称': jobName,
+    '职级': firstValue(row, ['职级', '预估职级']),
+    '底薪范围': firstValue(row, ['底薪范围', '薪资范围']),
+    'HC总需求': hc,
+    '已到岗': arrived,
+    '招聘中': hcNum ? Math.max(0, hcNum - arrivedNum) : firstValue(row, ['招聘中']),
+    '状态': status,
+    '简历筛选要点': firstValue(row, ['简历筛选要点', '任职要求', '筛选要点']),
+    '岗位JD': firstValue(row, ['岗位JD', 'JD', '职位描述', '岗位职责']),
+  };
+}
+
 function loadJDData(rows) {
-  JD_ROWS = rows.filter(r => r['岗位名称'] && r['状态'] !== '已关闭');
+  JD_ROWS = rows.map(normalizeJDRow).filter(Boolean);
   $('jdInfo').className = 'mt-2 text-xs file-ok p-2 rounded';
   $('jdInfo').textContent = `✓ 已加载 ${JD_ROWS.length} 个有效岗位`;
   fillProjectSelect();
@@ -821,6 +860,22 @@ const KNOWN_GIDS = [
   { gid: '807744883',  label: '无极' },      // 覆盖
 ];
 
+function gidFromUrl(url) {
+  const m = url.match(/[?&#]gid=(\d+)/);
+  return m ? m[1] : '0';
+}
+
+function buildSheetTargets(url) {
+  const selectedGid = gidFromUrl(url);
+  const targets = [{ gid: selectedGid, label: '当前表' }, ...KNOWN_GIDS];
+  const seen = new Set();
+  return targets.filter(({ gid }) => {
+    if (seen.has(gid)) return false;
+    seen.add(gid);
+    return true;
+  });
+}
+
 async function fetchOneGid(baseUrl, gid) {
   const csvUrl = baseUrl.replace(/gid=\d+/, 'gid=' + gid);
   const result = await tryFetchCsv(csvUrl);
@@ -834,26 +889,28 @@ $('fetchJdBtn').addEventListener('click', async () => {
   const csvUrl = gsheetCsvUrl(url);
   if (!csvUrl) { alert('URL 格式不对，应为 Google Sheet 链接'); return; }
   $('jdInfo').className = 'mt-2 text-xs text-slate-500';
-  $('jdInfo').textContent = '正在拉取多公司在线表格…';
+  $('jdInfo').textContent = '正在拉取在线表格…';
   try {
-    // 并行拉取多个 sheet，提升 2x 速度
+    const sheetTargets = buildSheetTargets(url);
+    // 并行拉取当前表与已知公司 sheet，提升速度
     const settled = await Promise.allSettled(
-      KNOWN_GIDS.map(({gid}) => fetchOneGid(csvUrl, gid))
+      sheetTargets.map(({gid}) => fetchOneGid(csvUrl, gid))
     );
     const all = [];
     const log = [];
     // 用 Map 去重：key = 项目组|部门|岗位名称|职级，后拉的覆盖前拉的
     const dedup = new Map();
     settled.forEach((res, i) => {
-      const { label } = KNOWN_GIDS[i];
+      const { label } = sheetTargets[i];
       if (res.status === 'fulfilled') {
         const rows = res.value;
         let added = 0;
         rows.forEach(r => {
-          if (!r['项目组'] && label !== '汇总表') r['项目组'] = label;
-          if (!r['岗位名称']) return;
-          const key = [r['项目组']||'', r['部门']||'', r['岗位名称']||'', r['职级']||''].join('|');
-          dedup.set(key, r);
+          const row = normalizeJDRow(r);
+          if (!row) return;
+          if (!row['项目组'] && label !== '汇总表' && label !== '当前表') row['项目组'] = label;
+          const key = [row['项目组']||'', row['部门']||'', row['岗位名称']||'', row['职级']||''].join('|');
+          dedup.set(key, row);
           added++;
         });
         log.push(`${label}(${added})`);
@@ -903,7 +960,7 @@ function fillProjectSelect() {
   const sel = $('projSelect');
   sel.disabled = false;
   const projsFromData = uniq(JD_ROWS.map(r => r['项目组']));
-  const projs = uniq([...FIXED_PROJECTS, ...projsFromData]);
+  const projs = projsFromData.length ? uniq([...FIXED_PROJECTS, ...projsFromData]) : [];
   sel.innerHTML = optionHTML('', '全部项目组') + projs.map(p => optionHTML(p)).join('');
   fillDeptSelect();
 }
